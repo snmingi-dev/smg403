@@ -2,11 +2,13 @@
 
 bl_info = {
     "name": "Smart Curve Helper",
-    "author": "snmingi-dev + Codex",
-    "version": (0, 1, 0),
-    "blender": (4, 3, 0),
+    "author": "SMG Tools",
+    "version": (1, 1, 0),
+    "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Smart Curve Helper",
     "description": "Align, flatten, and equalize Bezier handles quickly.",
+    "doc_url": "https://github.com/snmingi-dev/smg403/tree/main/projects/smart-curve-helper",
+    "tracker_url": "https://github.com/snmingi-dev/smg403/issues",
     "category": "Curve",
 }
 
@@ -16,6 +18,11 @@ from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Vector
 
 
+ERR_EDIT_MODE = "Enter Edit Mode on a Curve object."
+ERR_NO_BEZIER = "No Bezier points found in the selected target scope."
+ERR_VIEW_AXIS = "View axis/space requires an active 3D View region."
+
+
 def _active_curve_object(context):
     obj = context.active_object
     if obj is None or obj.type != "CURVE":
@@ -23,22 +30,49 @@ def _active_curve_object(context):
     return obj
 
 
-def _axis_local_vector(context, obj, axis):
-    if axis == "X":
-        return Vector((1.0, 0.0, 0.0))
-    if axis == "Y":
-        return Vector((0.0, 1.0, 0.0))
-    if axis == "Z":
-        return Vector((0.0, 0.0, 1.0))
+def _curve_edit_context_ok(context):
+    return context.mode == "EDIT_CURVE" and _active_curve_object(context) is not None
 
+
+def _view_axis_world(context, axis):
     region_3d = context.region_data
     if region_3d is None:
         return None
-    view_dir_world = region_3d.view_rotation @ Vector((0.0, 0.0, -1.0))
-    view_dir_local = obj.matrix_world.to_3x3().inverted_safe() @ view_dir_world
-    if view_dir_local.length == 0.0:
+    rotation = region_3d.view_rotation
+    if axis == "X":
+        return rotation @ Vector((1.0, 0.0, 0.0))
+    if axis == "Y":
+        return rotation @ Vector((0.0, 1.0, 0.0))
+    return rotation @ Vector((0.0, 0.0, -1.0))
+
+
+def _axis_local_vector(context, obj, axis, axis_space):
+    if axis == "VIEW":
+        world_vec = _view_axis_world(context, "Z")
+        if world_vec is None:
+            return None
+        local_vec = obj.matrix_world.to_3x3().inverted_safe() @ world_vec
+        return local_vec.normalized() if local_vec.length > 0.0 else None
+
+    axis_map_local = {
+        "X": Vector((1.0, 0.0, 0.0)),
+        "Y": Vector((0.0, 1.0, 0.0)),
+        "Z": Vector((0.0, 0.0, 1.0)),
+    }
+
+    if axis_space == "LOCAL":
+        return axis_map_local[axis]
+
+    if axis_space == "WORLD":
+        world_vec = axis_map_local[axis]
+        local_vec = obj.matrix_world.to_3x3().inverted_safe() @ world_vec
+        return local_vec.normalized() if local_vec.length > 0.0 else None
+
+    world_vec = _view_axis_world(context, axis)
+    if world_vec is None:
         return None
-    return view_dir_local.normalized()
+    local_vec = obj.matrix_world.to_3x3().inverted_safe() @ world_vec
+    return local_vec.normalized() if local_vec.length > 0.0 else None
 
 
 def _iter_target_points(obj, target):
@@ -52,6 +86,13 @@ def _iter_target_points(obj, target):
             yield point
 
 
+def _active_point_or_first(points):
+    for point in points:
+        if point.select_control_point:
+            return point
+    return points[0]
+
+
 def _set_handle_type(point, handle_type):
     point.handle_left_type = handle_type
     point.handle_right_type = handle_type
@@ -62,6 +103,28 @@ def _flatten_vector(value, axis_vec, target_dot, strength):
     return value + axis_vec * delta
 
 
+def _flatten_target_dot(points, axis_vec, flatten_reference, obj, context):
+    if flatten_reference == "AVERAGE":
+        vectors = []
+        for point in points:
+            vectors.append(point.co.copy())
+            vectors.append(point.handle_left.copy())
+            vectors.append(point.handle_right.copy())
+        return sum(vec.dot(axis_vec) for vec in vectors) / len(vectors)
+
+    if flatten_reference == "ACTIVE_POINT":
+        reference = _active_point_or_first(points)
+        return reference.co.dot(axis_vec)
+
+    if flatten_reference == "WORLD_ORIGIN":
+        local_origin = obj.matrix_world.inverted_safe() @ Vector((0.0, 0.0, 0.0))
+        return local_origin.dot(axis_vec)
+
+    cursor_world = context.scene.cursor.location.copy()
+    cursor_local = obj.matrix_world.inverted_safe() @ cursor_world
+    return cursor_local.dot(axis_vec)
+
+
 class SCH_Settings(PropertyGroup):
     axis: EnumProperty(
         name="Axis",
@@ -69,9 +132,18 @@ class SCH_Settings(PropertyGroup):
             ("X", "X", "Use X axis"),
             ("Y", "Y", "Use Y axis"),
             ("Z", "Z", "Use Z axis"),
-            ("VIEW", "View", "Use current viewport direction"),
+            ("VIEW", "View", "Use view depth axis"),
         ],
         default="X",
+    )
+    axis_space: EnumProperty(
+        name="Axis Space",
+        items=[
+            ("LOCAL", "Local", "Use object local axis"),
+            ("WORLD", "World", "Use world axis transformed into object local space"),
+            ("VIEW", "View", "Use view-aligned axis"),
+        ],
+        default="LOCAL",
     )
     handle_type: EnumProperty(
         name="Handle Type",
@@ -97,6 +169,16 @@ class SCH_Settings(PropertyGroup):
         ],
         default="SELECTED_ONLY",
     )
+    flatten_reference: EnumProperty(
+        name="Flatten Reference",
+        items=[
+            ("AVERAGE", "Average", "Flatten to average target plane"),
+            ("ACTIVE_POINT", "Active Point", "Flatten to active/selected point plane"),
+            ("WORLD_ORIGIN", "World Origin", "Flatten to world origin plane"),
+            ("CURSOR_3D", "3D Cursor", "Flatten to 3D cursor plane"),
+        ],
+        default="AVERAGE",
+    )
 
 
 class SCH_OT_align_handles(Operator):
@@ -107,19 +189,23 @@ class SCH_OT_align_handles(Operator):
 
     @classmethod
     def poll(cls, context):
-        return _active_curve_object(context) is not None
+        return _curve_edit_context_ok(context)
 
     def execute(self, context):
+        if not _curve_edit_context_ok(context):
+            self.report({"ERROR"}, ERR_EDIT_MODE)
+            return {"CANCELLED"}
+
         settings = context.scene.sch_settings
         obj = _active_curve_object(context)
-        axis_vec = _axis_local_vector(context, obj, settings.axis)
+        axis_vec = _axis_local_vector(context, obj, settings.axis, settings.axis_space)
         if axis_vec is None:
-            self.report({"ERROR"}, "View axis is unavailable in current context.")
+            self.report({"ERROR"}, ERR_VIEW_AXIS)
             return {"CANCELLED"}
 
         points = list(_iter_target_points(obj, settings.target))
         if not points:
-            self.report({"WARNING"}, "No target Bezier points.")
+            self.report({"WARNING"}, ERR_NO_BEZIER)
             return {"CANCELLED"}
 
         for point in points:
@@ -151,32 +237,37 @@ class SCH_OT_flatten(Operator):
 
     @classmethod
     def poll(cls, context):
-        return _active_curve_object(context) is not None
+        return _curve_edit_context_ok(context)
 
     def execute(self, context):
+        if not _curve_edit_context_ok(context):
+            self.report({"ERROR"}, ERR_EDIT_MODE)
+            return {"CANCELLED"}
+
         settings = context.scene.sch_settings
         obj = _active_curve_object(context)
-        axis_vec = _axis_local_vector(context, obj, settings.axis)
+        axis_vec = _axis_local_vector(context, obj, settings.axis, settings.axis_space)
         if axis_vec is None:
-            self.report({"ERROR"}, "View axis is unavailable in current context.")
+            self.report({"ERROR"}, ERR_VIEW_AXIS)
             return {"CANCELLED"}
 
         points = list(_iter_target_points(obj, settings.target))
         if not points:
-            self.report({"WARNING"}, "No target Bezier points.")
+            self.report({"WARNING"}, ERR_NO_BEZIER)
             return {"CANCELLED"}
 
-        vectors = []
-        for point in points:
-            vectors.append(point.co.copy())
-            vectors.append(point.handle_left.copy())
-            vectors.append(point.handle_right.copy())
-        avg_dot = sum(v.dot(axis_vec) for v in vectors) / len(vectors)
+        target_dot = _flatten_target_dot(
+            points=points,
+            axis_vec=axis_vec,
+            flatten_reference=settings.flatten_reference,
+            obj=obj,
+            context=context,
+        )
 
         for point in points:
-            point.co = _flatten_vector(point.co, axis_vec, avg_dot, settings.strength)
-            point.handle_left = _flatten_vector(point.handle_left, axis_vec, avg_dot, settings.strength)
-            point.handle_right = _flatten_vector(point.handle_right, axis_vec, avg_dot, settings.strength)
+            point.co = _flatten_vector(point.co, axis_vec, target_dot, settings.strength)
+            point.handle_left = _flatten_vector(point.handle_left, axis_vec, target_dot, settings.strength)
+            point.handle_right = _flatten_vector(point.handle_right, axis_vec, target_dot, settings.strength)
             _set_handle_type(point, settings.handle_type)
 
         obj.data.update()
@@ -192,25 +283,30 @@ class SCH_OT_equalize_length(Operator):
 
     @classmethod
     def poll(cls, context):
-        return _active_curve_object(context) is not None
+        return _curve_edit_context_ok(context)
 
     def execute(self, context):
+        if not _curve_edit_context_ok(context):
+            self.report({"ERROR"}, ERR_EDIT_MODE)
+            return {"CANCELLED"}
+
         settings = context.scene.sch_settings
         obj = _active_curve_object(context)
-        axis_vec = _axis_local_vector(context, obj, settings.axis)
+        axis_vec = _axis_local_vector(context, obj, settings.axis, settings.axis_space)
         if axis_vec is None:
-            self.report({"ERROR"}, "View axis is unavailable in current context.")
+            self.report({"ERROR"}, ERR_VIEW_AXIS)
             return {"CANCELLED"}
 
         points = list(_iter_target_points(obj, settings.target))
         if not points:
-            self.report({"WARNING"}, "No target Bezier points.")
+            self.report({"WARNING"}, ERR_NO_BEZIER)
             return {"CANCELLED"}
 
         lengths = []
         for point in points:
             lengths.append((point.handle_left - point.co).length)
             lengths.append((point.handle_right - point.co).length)
+
         non_zero = [value for value in lengths if value > 0.0]
         if not non_zero:
             self.report({"WARNING"}, "No non-zero handle lengths in target.")
@@ -248,14 +344,17 @@ class SCH_PT_panel(Panel):
 
         col = layout.column(align=True)
         col.prop(settings, "axis")
+        col.prop(settings, "axis_space")
         col.prop(settings, "handle_type")
         col.prop(settings, "strength")
         col.prop(settings, "target")
+        col.prop(settings, "flatten_reference")
 
         layout.separator()
         layout.operator("smart_curve.align_handles", icon="CURVE_BEZCURVE")
         layout.operator("smart_curve.flatten", icon="MESH_GRID")
         layout.operator("smart_curve.equalize_length", icon="DRIVER_DISTANCE")
+        layout.label(text="Undo is supported for all three operators.")
 
 
 classes = (

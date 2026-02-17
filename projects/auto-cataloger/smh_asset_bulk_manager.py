@@ -2,19 +2,21 @@
 
 bl_info = {
     "name": "Auto Cataloger (Rules-based Asset Catalog Assignment)",
-    "author": "snmingi-dev + Codex",
-    "version": (0, 2, 0),
-    "blender": (4, 3, 0),
+    "author": "SMG Tools",
+    "version": (1, 1, 0),
+    "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
-    "description": "Rules-based auto catalog creation and bulk assignment for Asset Browser.",
+    "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
+    "doc_url": "https://github.com/snmingi-dev/smg403/tree/main/projects/auto-cataloger",
+    "tracker_url": "https://github.com/snmingi-dev/smg403/issues",
     "category": "Asset Management",
 }
 
+import hashlib
 import os
 import re
 import shutil
 import uuid
-import hashlib
 from collections import defaultdict
 
 import bpy
@@ -31,9 +33,10 @@ from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup, UIList
 
 ADDON_ID = __name__
 CATALOG_FILE_NAME = "blender_assets.cats.txt"
+MANUAL_LIBRARY_KEY = "__MANUAL__"
 DEFAULT_HEADER_LINES = [
     "# This is an Asset Catalog Definition file for Blender.",
-    "# Auto Cataloger manages this file.",
+    "# Managed by Auto Cataloger.",
     "VERSION 1",
 ]
 
@@ -51,22 +54,77 @@ def _safe_segment(value):
     return token or "Uncategorized"
 
 
-def _get_addon_prefs(context):
+def _pretty_catalog_leaf(value):
+    leaf = value.split("/")[-1]
+    leaf = leaf.replace("_", " ").replace("-", " ")
+    leaf = re.sub(r"\s+", " ", leaf).strip()
+    if not leaf:
+        return "Uncategorized"
+    return leaf.title()
+
+
+def _catalog_paths_for_root(asset_library_root):
+    catalog_file = os.path.join(asset_library_root, CATALOG_FILE_NAME)
+    backup_file = catalog_file + ".bak"
+    return catalog_file, backup_file
+
+
+def _addon_prefs(context):
     addon = context.preferences.addons.get(ADDON_ID)
     if addon is None:
         return None
     return addon.preferences
 
 
+def _asset_library_items(self, context):
+    items = [
+        (
+            MANUAL_LIBRARY_KEY,
+            "Manual Folder",
+            "Use Asset Library Root Folder directly",
+        )
+    ]
+
+    prefs_context = context if context is not None else bpy.context
+    libs = getattr(prefs_context.preferences.filepaths, "asset_libraries", [])
+    for lib in libs:
+        lib_path = bpy.path.abspath(lib.path).strip()
+        if not lib_path:
+            continue
+        display_name = lib.name.strip() if lib.name else os.path.basename(lib_path)
+        if not display_name:
+            display_name = lib_path
+        items.append((lib_path, display_name, lib_path))
+
+    return items
+
+
+def _resolve_registered_library_root(context, prefs):
+    if prefs.asset_library_name == MANUAL_LIBRARY_KEY:
+        return None
+
+    selected = os.path.abspath(bpy.path.abspath(prefs.asset_library_name))
+    libs = getattr(context.preferences.filepaths, "asset_libraries", [])
+    for lib in libs:
+        candidate = os.path.abspath(bpy.path.abspath(lib.path))
+        if candidate == selected:
+            return candidate
+    return None
+
+
 def _resolve_asset_library_root(context, prefs):
-    root = bpy.path.abspath(prefs.asset_library_root_folder).strip()
-    if root:
-        return os.path.abspath(root)
+    registered = _resolve_registered_library_root(context, prefs)
+    if registered:
+        return registered, "REGISTERED"
+
+    manual = bpy.path.abspath(prefs.asset_library_root_folder).strip()
+    if manual:
+        return os.path.abspath(manual), "MANUAL"
 
     if bpy.data.filepath:
-        return os.path.dirname(bpy.data.filepath)
+        return os.path.dirname(os.path.abspath(bpy.data.filepath)), "BLEND"
 
-    return None
+    return None, "NONE"
 
 
 def _delimiter_token(delimiter_enum):
@@ -109,6 +167,7 @@ def _read_catalog_file(catalog_file_path):
                 "uuid": catalog_uuid,
                 "name": catalog_name,
             }
+
     if not headers:
         headers = DEFAULT_HEADER_LINES[:]
     if not any(line.startswith("VERSION ") for line in headers):
@@ -131,24 +190,23 @@ def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
 
 def _ensure_catalogs(asset_library_root, catalog_paths):
     os.makedirs(asset_library_root, exist_ok=True)
-    catalog_file_path = os.path.join(asset_library_root, CATALOG_FILE_NAME)
+    catalog_file_path, _ = _catalog_paths_for_root(asset_library_root)
     headers, path_to_entry = _read_catalog_file(catalog_file_path)
 
     created = 0
     for catalog_path in sorted(catalog_paths):
         norm = _normalize_path_fragment(catalog_path)
-        if not norm:
-            continue
-        if norm in path_to_entry:
+        if not norm or norm in path_to_entry:
             continue
         path_to_entry[norm] = {
             "uuid": str(uuid.uuid4()),
-            "name": _safe_segment(norm.split("/")[-1]),
+            "name": _pretty_catalog_leaf(norm),
         }
         created += 1
 
     if created > 0:
         _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry)
+
     return {path: data["uuid"] for path, data in path_to_entry.items()}, created
 
 
@@ -217,13 +275,16 @@ def _compose_catalog_path(root_prefix, tail):
     return "Uncategorized"
 
 
-def _plan_signature(prefs, plan):
+def _plan_signature(prefs, root, plan):
     digest = hashlib.sha1()
+    digest.update(root.encode("utf-8"))
+    digest.update(prefs.asset_library_name.encode("utf-8"))
     digest.update(prefs.asset_library_root_folder.encode("utf-8"))
     digest.update(prefs.classification_mode.encode("utf-8"))
     digest.update(prefs.prefix_delimiter.encode("utf-8"))
     digest.update(prefs.catalog_root_prefix.encode("utf-8"))
     digest.update(prefs.target_type.encode("utf-8"))
+    digest.update(str(bool(prefs.auto_mark_missing_as_assets)).encode("utf-8"))
     for datablock, catalog_path in plan:
         digest.update(datablock.name.encode("utf-8"))
         digest.update(b"\0")
@@ -233,9 +294,9 @@ def _plan_signature(prefs, plan):
 
 
 def _build_assignment_plan(context, prefs):
-    library_root = _resolve_asset_library_root(context, prefs)
+    library_root, root_source = _resolve_asset_library_root(context, prefs)
     if not library_root:
-        raise ValueError("Asset Library Root Folder is empty and current .blend is not saved.")
+        raise ValueError("Asset Library Root is empty and current .blend is not saved.")
 
     plan = []
     skipped_linked = 0
@@ -268,12 +329,18 @@ def _build_assignment_plan(context, prefs):
         catalog_path = _compose_catalog_path(prefs.catalog_root_prefix, tail)
         plan.append((datablock, catalog_path))
 
-    return library_root, plan, skipped_linked, skipped_external
+    return library_root, root_source, plan, skipped_linked, skipped_external
 
 
 class AUTO_CATALOGER_preferences(AddonPreferences):
     bl_idname = ADDON_ID
 
+    asset_library_name: EnumProperty(
+        name="Asset Library",
+        description="Use a registered Asset Library from Blender Preferences",
+        items=_asset_library_items,
+        default=MANUAL_LIBRARY_KEY,
+    )
     asset_library_root_folder: StringProperty(
         name="Asset Library Root Folder",
         subtype="DIR_PATH",
@@ -310,16 +377,23 @@ class AUTO_CATALOGER_preferences(AddonPreferences):
         ],
         default="ALL",
     )
+    auto_mark_missing_as_assets: BoolProperty(
+        name="Auto-Mark Missing as Assets",
+        description="If enabled, non-asset datablocks are asset_mark()'ed during Apply",
+        default=False,
+    )
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="These settings are reused in the Auto Cataloger panel.")
+        layout.label(text="Settings used by the Auto Cataloger panel.")
         col = layout.column(align=True)
+        col.prop(self, "asset_library_name")
         col.prop(self, "asset_library_root_folder")
         col.prop(self, "classification_mode")
         col.prop(self, "prefix_delimiter")
         col.prop(self, "catalog_root_prefix")
         col.prop(self, "target_type")
+        col.prop(self, "auto_mark_missing_as_assets")
 
 
 class AUTO_CATALOGER_preview_item(PropertyGroup):
@@ -336,6 +410,8 @@ class AUTO_CATALOGER_runtime(PropertyGroup):
     preview_skipped_external: IntProperty(default=0)
     preview_ready: BoolProperty(default=False)
     preview_signature: StringProperty(default="")
+    last_root: StringProperty(default="")
+    last_root_source: StringProperty(default="")
 
 
 class AUTO_CATALOGER_UL_preview(UIList):
@@ -352,7 +428,7 @@ class AUTO_CATALOGER_OT_preview(Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        prefs = _get_addon_prefs(context)
+        prefs = _addon_prefs(context)
         if prefs is None:
             self.report({"ERROR"}, "Addon preferences not found.")
             return {"CANCELLED"}
@@ -363,7 +439,7 @@ class AUTO_CATALOGER_OT_preview(Operator):
         state.preview_signature = ""
 
         try:
-            _, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+            root, root_source, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -381,8 +457,11 @@ class AUTO_CATALOGER_OT_preview(Operator):
         state.preview_catalog_count = len(by_catalog)
         state.preview_skipped_linked = skipped_linked
         state.preview_skipped_external = skipped_external
-        state.preview_signature = _plan_signature(prefs, plan)
+        state.preview_signature = _plan_signature(prefs, root, plan)
         state.preview_ready = True
+        state.last_root = root
+        state.last_root_source = root_source
+
         self.report({"INFO"}, f"Preview: {len(plan)} assets, {len(by_catalog)} catalogs")
         return {"FINISHED"}
 
@@ -394,7 +473,7 @@ class AUTO_CATALOGER_OT_apply(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        prefs = _get_addon_prefs(context)
+        prefs = _addon_prefs(context)
         if prefs is None:
             self.report({"ERROR"}, "Addon preferences not found.")
             return {"CANCELLED"}
@@ -402,36 +481,40 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state = context.scene.auto_cataloger_runtime
 
         try:
-            library_root, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+            root, root_source, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        plan_sig = _plan_signature(prefs, plan)
+        plan_sig = _plan_signature(prefs, root, plan)
         if not state.preview_ready:
             self.report({"ERROR"}, "Run Preview first.")
             return {"CANCELLED"}
         if state.preview_signature != plan_sig:
             self.report({"ERROR"}, "Options or target set changed. Run Preview again.")
             return {"CANCELLED"}
-
         if not plan:
             self.report({"WARNING"}, "No assignable assets found with current options.")
             return {"CANCELLED"}
 
         catalog_paths = sorted({catalog_path for _, catalog_path in plan})
-        uuid_map, created = _ensure_catalogs(library_root, catalog_paths)
+        uuid_map, created = _ensure_catalogs(root, catalog_paths)
 
         assigned = 0
-        skipped_unmarkable = 0
+        skipped_unmarked = 0
+        auto_marked = 0
         for datablock, catalog_path in plan:
-            if getattr(datablock, "asset_data", None) is None:
-                if hasattr(datablock, "asset_mark"):
-                    datablock.asset_mark()
             asset_data = getattr(datablock, "asset_data", None)
+            if asset_data is None and prefs.auto_mark_missing_as_assets and hasattr(datablock, "asset_mark"):
+                datablock.asset_mark()
+                asset_data = getattr(datablock, "asset_data", None)
+                if asset_data is not None:
+                    auto_marked += 1
+
             if asset_data is None:
-                skipped_unmarkable += 1
+                skipped_unmarked += 1
                 continue
+
             asset_data.catalog_id = uuid_map[catalog_path]
             assigned += 1
 
@@ -441,15 +524,48 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state.preview_skipped_external = skipped_external
         state.preview_ready = False
         state.preview_signature = ""
+        state.last_root = root
+        state.last_root_source = root_source
 
         self.report(
             {"INFO"},
             (
-                f"Applied: {assigned} assets, catalogs: {len(catalog_paths)} "
-                f"(created {created}), skipped linked {skipped_linked}, "
-                f"skipped out-of-root {skipped_external}, unmarkable {skipped_unmarkable}"
+                f"Applied: {assigned} assets, catalogs: {len(catalog_paths)} (created {created}), "
+                f"skipped linked {skipped_linked}, skipped out-of-root {skipped_external}, "
+                f"skipped non-assets {skipped_unmarked}, auto-marked {auto_marked}"
             ),
         )
+        return {"FINISHED"}
+
+
+class AUTO_CATALOGER_OT_restore_backup(Operator):
+    bl_idname = "auto_cataloger.restore_backup"
+    bl_label = "Restore from .bak"
+    bl_description = "Restore blender_assets.cats.txt from blender_assets.cats.txt.bak"
+    bl_options = {"REGISTER"}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        prefs = _addon_prefs(context)
+        if prefs is None:
+            self.report({"ERROR"}, "Addon preferences not found.")
+            return {"CANCELLED"}
+
+        root, _ = _resolve_asset_library_root(context, prefs)
+        if not root:
+            self.report({"ERROR"}, "Cannot resolve Asset Library Root.")
+            return {"CANCELLED"}
+
+        catalog_file, backup_file = _catalog_paths_for_root(root)
+        if not os.path.exists(backup_file):
+            self.report({"ERROR"}, f"Backup not found: {backup_file}")
+            return {"CANCELLED"}
+
+        os.makedirs(root, exist_ok=True)
+        shutil.copy2(backup_file, catalog_file)
+        self.report({"INFO"}, f"Restored catalog file from backup: {backup_file}")
         return {"FINISHED"}
 
 
@@ -462,23 +578,46 @@ class AUTO_CATALOGER_PT_panel(Panel):
 
     def draw(self, context):
         layout = self.layout
-        prefs = _get_addon_prefs(context)
+        prefs = _addon_prefs(context)
         state = context.scene.auto_cataloger_runtime
 
         if prefs is None:
             layout.label(text="Addon preferences not available.")
             return
 
+        root, root_source = _resolve_asset_library_root(context, prefs)
+        catalog_file = ""
+        backup_file = ""
+        if root:
+            catalog_file, backup_file = _catalog_paths_for_root(root)
+
         col = layout.column(align=True)
+        col.prop(prefs, "asset_library_name")
         col.prop(prefs, "asset_library_root_folder")
         col.prop(prefs, "classification_mode")
         col.prop(prefs, "prefix_delimiter")
         col.prop(prefs, "catalog_root_prefix")
         col.prop(prefs, "target_type")
+        col.prop(prefs, "auto_mark_missing_as_assets")
 
         row = layout.row(align=True)
         row.operator("auto_cataloger.preview", text="Preview", icon="HIDE_OFF")
         row.operator("auto_cataloger.apply", text="Apply", icon="CHECKMARK")
+
+        safety = layout.box()
+        safety.label(text="Safety & Recovery")
+        safety.label(text=f"Root source: {root_source}")
+        if root:
+            safety.label(text=f"Catalog file: {'Exists' if os.path.exists(catalog_file) else 'Missing'}")
+            safety.label(text=f"Backup file: {'Exists' if os.path.exists(backup_file) else 'Missing'}")
+            safety.label(text=f".cats: {catalog_file}")
+            safety.label(text=f".bak: {backup_file}")
+        else:
+            safety.label(text="Root not resolved yet.")
+        restore_row = safety.row(align=True)
+        restore_row.enabled = bool(backup_file and os.path.exists(backup_file))
+        restore_row.operator("auto_cataloger.restore_backup", icon="LOOP_BACK")
+        safety.label(text="Note: Blender Undo does not revert external .cats file changes.")
 
         box = layout.box()
         box.label(text=f"Preview assets: {state.preview_total}")
@@ -504,6 +643,7 @@ classes = (
     AUTO_CATALOGER_UL_preview,
     AUTO_CATALOGER_OT_preview,
     AUTO_CATALOGER_OT_apply,
+    AUTO_CATALOGER_OT_restore_backup,
     AUTO_CATALOGER_PT_panel,
 )
 

@@ -1,39 +1,57 @@
 # Post-Unwrap Cleaner
 
-UV cleanup addon MVP for Blender.
+UV Editor one-click cleanup pipeline for post-unwrap workflows.
 
-## MVP Core
+## Supported Blender Versions
 
-After unwrap, run one action in UV Editor:
-
-- Straighten
-- Relax
-- Pack
-
-## UI
-
-- UV Editor sidebar panel: `Post-Unwrap Cleaner`
-- Button: `One-Click Clean`
-
-## Options (4 only)
-
-1. `Straighten Threshold` (0.1~1.0)
-2. `Relax Iterations` (1~20)
-3. `Packing Margin` (0.01~0.1)
-4. `Target` (`Selected Islands` / `All Islands`)
-
-## Non-goals
-
-- UV unwrap generation itself
-- Texture baking
-- Advanced island split/merge
+- 4.2 LTS
+- 4.5 LTS
+- 5.0
 
 ## Install
 
-1. Blender > `Edit > Preferences > Add-ons > Install...`
-2. Select `post_unwrap_cleaner.py`
-3. Enable `Post-Unwrap Cleaner`
+1. Build ZIP with `scripts/package_addons.ps1` or use `post_unwrap_cleaner.py` directly.
+2. Blender > `Edit > Preferences > Add-ons > Install...`
+3. Select ZIP (recommended) or `.py`.
+4. Enable `Post-Unwrap Cleaner`.
 
-## License
+## Usage Flow
 
-GPL-3.0-or-later (see repository root `LICENSE`).
+1. Open UV Editor sidebar > `Post-Unwrap Cleaner`.
+2. Set threshold/iterations/margin/target.
+3. Configure optional step toggles (`Straighten`, `Relax`, `Pack`).
+4. Click `One-Click Clean`.
+
+## Safety & Recovery
+
+- UV selection state is restored after execution.
+- `Respect Pins` is ON by default.
+- Straighten step can produce `0` edits while Relax/Pack still run.
+- Undo is supported for mesh/UV data changes.
+
+## Known Limitations
+
+- Multi-object Edit Mode is intentionally blocked.
+- Operator expects UV Editor region context.
+- Advanced unwrap generation and baking are out of scope.
+
+## Before/After Captures
+
+- Place screenshots/GIF here:
+- `demo/before-after.gif`
+- `demo/one-click-flow.gif`
+
+## Demo Files
+
+- Intended demo path: `demo/post_unwrap_cleaner_demo.blend`
+- Blender CLI is required to generate a valid `.blend` automatically.
+- See `demo/README.md` for manual creation steps.
+
+## Support
+
+- Email: `support@smgtools.dev`
+- Issues: `https://github.com/snmingi-dev/smg403/issues`
+
+## Positioning
+
+Focused on **selection-safe UV cleanup** with pin protection and staged execution.

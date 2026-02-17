@@ -2,17 +2,19 @@
 
 bl_info = {
     "name": "Post-Unwrap Cleaner",
-    "author": "snmingi-dev + Codex",
-    "version": (0, 1, 0),
-    "blender": (4, 3, 0),
+    "author": "SMG Tools",
+    "version": (1, 1, 0),
+    "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
+    "doc_url": "https://github.com/snmingi-dev/smg403/tree/main/projects/post-unwrap-cleaner",
+    "tracker_url": "https://github.com/snmingi-dev/smg403/issues",
     "category": "UV",
 }
 
-import bpy
 import bmesh
-from bpy.props import EnumProperty, FloatProperty, IntProperty, PointerProperty
+import bpy
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
 from bpy.types import Operator, Panel, PropertyGroup
 
 
@@ -30,20 +32,62 @@ def _get_uv_window_region(area):
     return None
 
 
-def _iter_target_loops(bm, uv_layer, target):
+def _snapshot_uv_selection_state(bm, uv_layer):
+    snapshot = []
     for face in bm.faces:
         if face.hide:
             continue
         for loop in face.loops:
             luv = loop[uv_layer]
+            snapshot.append((loop, luv.select, luv.select_edge))
+    return snapshot
+
+
+def _restore_uv_selection_state(snapshot, uv_layer):
+    for loop, selected, selected_edge in snapshot:
+        try:
+            luv = loop[uv_layer]
+        except ReferenceError:
+            continue
+        luv.select = selected
+        luv.select_edge = selected_edge
+
+
+def _prepare_target_selection(bm, uv_layer, target, respect_pins):
+    target_loops = []
+    skipped_pins = 0
+
+    for face in bm.faces:
+        if face.hide:
+            continue
+        for loop in face.loops:
+            luv = loop[uv_layer]
+            if respect_pins and luv.pin_uv:
+                skipped_pins += 1
+                continue
             if target == "SELECTED" and not luv.select:
                 continue
-            yield loop
+            target_loops.append(loop)
+
+    for face in bm.faces:
+        if face.hide:
+            continue
+        for loop in face.loops:
+            luv = loop[uv_layer]
+            luv.select = False
+            luv.select_edge = False
+
+    for loop in target_loops:
+        luv = loop[uv_layer]
+        luv.select = True
+        luv.select_edge = True
+
+    return target_loops, skipped_pins
 
 
-def _straighten_selected_loops(bm, uv_layer, threshold, target):
+def _straighten_selected_loops(loops, uv_layer, threshold):
     adjusted = 0
-    for loop in _iter_target_loops(bm, uv_layer, target):
+    for loop in loops:
         luv_a = loop[uv_layer]
         luv_b = loop.link_loop_next[uv_layer]
         dx = luv_b.uv.x - luv_a.uv.x
@@ -63,16 +107,6 @@ def _straighten_selected_loops(bm, uv_layer, threshold, target):
             luv_b.uv.y = snap_y
             adjusted += 1
     return adjusted
-
-
-def _force_select_all_uv(bm, uv_layer):
-    for face in bm.faces:
-        if face.hide:
-            continue
-        for loop in face.loops:
-            luv = loop[uv_layer]
-            luv.select = True
-            luv.select_edge = True
 
 
 class PUC_Settings(PropertyGroup):
@@ -106,6 +140,15 @@ class PUC_Settings(PropertyGroup):
         default="SELECTED",
     )
 
+    run_straighten: BoolProperty(name="Run Straighten", default=True)
+    run_relax: BoolProperty(name="Run Relax", default=True)
+    run_pack: BoolProperty(name="Run Pack", default=True)
+    respect_pins: BoolProperty(
+        name="Respect Pins",
+        description="Do not move pinned UVs",
+        default=True,
+    )
+
 
 class PUC_OT_one_click_clean(Operator):
     bl_idname = "puc.one_click_clean"
@@ -127,42 +170,86 @@ class PUC_OT_one_click_clean(Operator):
             self.report({"ERROR"}, "Enter Edit Mode with a mesh object.")
             return {"CANCELLED"}
 
+        if not (settings.run_straighten or settings.run_relax or settings.run_pack):
+            self.report({"ERROR"}, "Enable at least one step: Straighten, Relax, or Pack.")
+            return {"CANCELLED"}
+
+        in_mode = getattr(context, "objects_in_mode_unique_data", None)
+        if in_mode and len(in_mode) > 1:
+            self.report({"ERROR"}, "Multi-object Edit Mode is not supported.")
+            return {"CANCELLED"}
+
         me = obj.data
         bm = bmesh.from_edit_mesh(me)
         uv_layer = bm.loops.layers.uv.verify()
 
-        if settings.target == "ALL":
-            _force_select_all_uv(bm, uv_layer)
-
-        changed = _straighten_selected_loops(
+        snapshot = _snapshot_uv_selection_state(bm, uv_layer)
+        loops, skipped_pins = _prepare_target_selection(
             bm=bm,
             uv_layer=uv_layer,
-            threshold=settings.straighten_threshold,
             target=settings.target,
+            respect_pins=settings.respect_pins,
         )
-        if changed == 0 and settings.target == "SELECTED":
-            self.report({"WARNING"}, "No selected UV islands/edges to process.")
+
+        if not loops:
+            _restore_uv_selection_state(snapshot, uv_layer)
+            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+            self.report({"WARNING"}, "No UVs available for current target/pin filter.")
             return {"CANCELLED"}
 
-        bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+        changed = 0
+        relaxed = False
+        packed = False
 
         area = context.area
         region = _get_uv_window_region(area)
         if region is None:
+            _restore_uv_selection_state(snapshot, uv_layer)
+            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
             self.report({"ERROR"}, "UV window region not found.")
             return {"CANCELLED"}
 
-        with context.temp_override(
-            area=area,
-            region=region,
-            active_object=obj,
-            object=obj,
-            edit_object=obj,
-        ):
-            bpy.ops.uv.minimize_stretch(iterations=settings.relax_iterations)
-            bpy.ops.uv.pack_islands(margin=settings.packing_margin)
+        try:
+            if settings.run_straighten:
+                changed = _straighten_selected_loops(
+                    loops=loops,
+                    uv_layer=uv_layer,
+                    threshold=settings.straighten_threshold,
+                )
 
-        self.report({"INFO"}, f"Clean complete: straightened edges {changed}")
+            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+
+            with context.temp_override(
+                area=area,
+                region=region,
+                active_object=obj,
+                object=obj,
+                edit_object=obj,
+            ):
+                if settings.run_relax:
+                    bpy.ops.uv.minimize_stretch(iterations=settings.relax_iterations)
+                    relaxed = True
+                if settings.run_pack:
+                    bpy.ops.uv.pack_islands(margin=settings.packing_margin)
+                    packed = True
+
+        except RuntimeError as exc:
+            _restore_uv_selection_state(snapshot, uv_layer)
+            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+            self.report({"ERROR"}, f"UV operation failed: {exc}")
+            return {"CANCELLED"}
+
+        _restore_uv_selection_state(snapshot, uv_layer)
+        bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+
+        self.report(
+            {"INFO"},
+            (
+                f"Clean complete: straightened={changed}, "
+                f"relaxed={'yes' if relaxed else 'no'}, packed={'yes' if packed else 'no'}, "
+                f"pinned_skipped={skipped_pins}"
+            ),
+        )
         return {"FINISHED"}
 
 
@@ -189,7 +276,17 @@ class PUC_PT_uv_sidebar(Panel):
         col.prop(settings, "relax_iterations")
         col.prop(settings, "packing_margin")
         col.prop(settings, "target")
+
+        layout.separator()
+        flow = layout.column(align=True)
+        flow.label(text="Pipeline Steps")
+        flow.prop(settings, "run_straighten")
+        flow.prop(settings, "run_relax")
+        flow.prop(settings, "run_pack")
+        flow.prop(settings, "respect_pins")
+
         layout.operator("puc.one_click_clean", icon="CHECKMARK")
+        layout.label(text="Selection is restored after execution.")
 
 
 classes = (
