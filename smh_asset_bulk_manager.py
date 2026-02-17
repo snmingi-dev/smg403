@@ -1,574 +1,456 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 bl_info = {
-    "name": "SMH Asset Bulk Manager MVP",
+    "name": "Auto Cataloger (Rules-based Asset Catalog Assignment)",
     "author": "snmingi-dev + Codex",
-    "version": (0, 1, 0),
-    "blender": (4, 0, 0),
-    "location": "3D View > Sidebar > SMH Assets / Asset Browser > Sidebar > SMH Assets",
-    "description": "Bulk catalog automation and duplicate replacement for Blender Asset Browser workflows.",
+    "version": (0, 2, 0),
+    "blender": (4, 3, 0),
+    "location": "3D View > Sidebar > Auto Cataloger",
+    "description": "Rules-based auto catalog creation and bulk assignment for Asset Browser.",
     "category": "Asset Management",
 }
 
 import os
 import re
+import shutil
 import uuid
 from collections import defaultdict
 
 import bpy
 from bpy.props import (
-    BoolProperty,
     CollectionProperty,
     EnumProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
 )
-from bpy.types import Operator, Panel, PropertyGroup, UIList
+from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup, UIList
 
 
+ADDON_ID = __name__
 CATALOG_FILE_NAME = "blender_assets.cats.txt"
 DEFAULT_HEADER_LINES = [
     "# This is an Asset Catalog Definition file for Blender.",
-    "# You can edit it by hand, but keep the format intact.",
+    "# Auto Cataloger manages this file.",
     "VERSION 1",
 ]
 
 
-def _normalize_catalog_path(value):
-    normalized = value.strip().replace("\\", "/")
-    normalized = re.sub(r"/{2,}", "/", normalized)
-    return normalized.strip("/")
+def _normalize_path_fragment(value):
+    cleaned = value.replace("\\", "/").strip()
+    cleaned = re.sub(r"/{2,}", "/", cleaned)
+    return cleaned.strip("/")
 
 
-def _safe_catalog_name(path):
-    if not path:
-        return "Uncategorized"
-    return path.split("/")[-1]
+def _safe_segment(value):
+    token = re.sub(r"\s+", "_", value.strip())
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", token)
+    token = re.sub(r"_+", "_", token).strip("_")
+    return token or "Uncategorized"
 
 
-def _base_name(name):
-    return re.sub(r"\.\d{3}$", "", name)
-
-
-def _selected_local_ids(context):
-    collected = []
-    seen = set()
-
-    def _append_if_id(data):
-        if not isinstance(data, bpy.types.ID):
-            return
-        pointer = data.as_pointer()
-        if pointer in seen:
-            return
-        seen.add(pointer)
-        collected.append(data)
-
-    for obj in getattr(context, "selected_objects", []) or []:
-        _append_if_id(obj)
-
-    for data in getattr(context, "selected_ids", []) or []:
-        _append_if_id(data)
-
-    for asset_rep in getattr(context, "selected_assets", []) or []:
-        local_id = getattr(asset_rep, "local_id", None)
-        if local_id is not None:
-            _append_if_id(local_id)
-
-    active_obj = getattr(context, "active_object", None)
-    if active_obj is not None:
-        _append_if_id(active_obj)
-
-    return collected
-
-
-def _names_from_folder(folder_path, recursive):
-    if not folder_path:
-        return []
-    if not os.path.isdir(folder_path):
-        return []
-
-    names = []
-    for root, dirs, files in os.walk(folder_path):
-        for directory in dirs:
-            if not directory.startswith("."):
-                names.append(directory)
-        for filename in files:
-            if filename.startswith("."):
-                continue
-            stem, _ = os.path.splitext(filename)
-            if stem:
-                names.append(stem)
-        if not recursive:
-            break
-    return names
-
-
-def _catalog_path_from_name(name, pattern, catalog_root):
-    root = _normalize_catalog_path(catalog_root)
-    match = re.search(pattern, name)
-    if not match:
+def _get_addon_prefs(context):
+    addon = context.preferences.addons.get(ADDON_ID)
+    if addon is None:
         return None
-    if match.lastindex and match.lastindex >= 1:
-        token = match.group(1)
+    return addon.preferences
+
+
+def _resolve_asset_library_root(context, prefs):
+    root = bpy.path.abspath(prefs.asset_library_root_folder).strip()
+    if root:
+        return os.path.abspath(root)
+
+    if bpy.data.filepath:
+        return os.path.dirname(bpy.data.filepath)
+
+    return None
+
+
+def _delimiter_token(delimiter_enum):
+    mapping = {
+        "UNDERSCORE": "_",
+        "DASH": "-",
+        "SPACE": " ",
+    }
+    return mapping[delimiter_enum]
+
+
+def _prefix_from_name(name, delimiter_enum):
+    delim = _delimiter_token(delimiter_enum)
+    if delim == " ":
+        head = name.split()[0] if name.split() else name
     else:
-        token = match.group(0)
-    token = token.strip("_-/ ")
-    if not token:
-        return None
-    token = token.replace(" ", "_")
-    return _normalize_catalog_path(f"{root}/{token}" if root else token)
+        head = name.split(delim, 1)[0]
+    return _safe_segment(head)
 
 
 def _read_catalog_file(catalog_file_path):
-    header_lines = []
-    catalogs_by_path = {}
-
     if not os.path.exists(catalog_file_path):
-        return DEFAULT_HEADER_LINES[:], catalogs_by_path
+        return DEFAULT_HEADER_LINES[:], {}
 
+    headers = []
+    path_to_entry = {}
     with open(catalog_file_path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
                 continue
-            if line.startswith("#") or line.startswith("VERSION "):
-                header_lines.append(line)
+            if stripped.startswith("#") or stripped.startswith("VERSION "):
+                headers.append(stripped)
                 continue
-
-            parts = line.split(":", 2)
+            parts = stripped.split(":", 2)
             if len(parts) != 3:
                 continue
-
-            catalog_uuid, catalog_path, simple_name = parts
-            catalogs_by_path[catalog_path] = {
+            catalog_uuid, catalog_path, catalog_name = parts
+            path_to_entry[catalog_path] = {
                 "uuid": catalog_uuid,
-                "name": simple_name,
+                "name": catalog_name,
             }
-
-    if not any(line.startswith("VERSION ") for line in header_lines):
-        header_lines.append("VERSION 1")
-    if not header_lines:
-        header_lines = DEFAULT_HEADER_LINES[:]
-
-    return header_lines, catalogs_by_path
+    if not headers:
+        headers = DEFAULT_HEADER_LINES[:]
+    if not any(line.startswith("VERSION ") for line in headers):
+        headers.append("VERSION 1")
+    return headers, path_to_entry
 
 
-def _write_catalog_file(catalog_file_path, header_lines, catalogs_by_path):
-    sorted_paths = sorted(catalogs_by_path.keys())
-    output_lines = []
+def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
+    if os.path.exists(catalog_file_path):
+        shutil.copy2(catalog_file_path, catalog_file_path + ".bak")
 
-    for line in header_lines:
-        output_lines.append(line.rstrip())
-
-    for path in sorted_paths:
-        entry = catalogs_by_path[path]
-        output_lines.append(f"{entry['uuid']}:{path}:{entry['name']}")
+    lines = [line.rstrip() for line in headers]
+    for catalog_path in sorted(path_to_entry.keys()):
+        entry = path_to_entry[catalog_path]
+        lines.append(f"{entry['uuid']}:{catalog_path}:{entry['name']}")
 
     with open(catalog_file_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write("\n".join(output_lines) + "\n")
+        handle.write("\n".join(lines) + "\n")
 
 
-def _ensure_catalog(asset_library_root, catalog_path):
-    normalized_path = _normalize_catalog_path(catalog_path)
-    if not normalized_path:
-        raise ValueError("Catalog path is empty.")
-
+def _ensure_catalogs(asset_library_root, catalog_paths):
     os.makedirs(asset_library_root, exist_ok=True)
     catalog_file_path = os.path.join(asset_library_root, CATALOG_FILE_NAME)
+    headers, path_to_entry = _read_catalog_file(catalog_file_path)
 
-    header_lines, catalogs_by_path = _read_catalog_file(catalog_file_path)
-    created = False
-    if normalized_path not in catalogs_by_path:
-        catalogs_by_path[normalized_path] = {
+    created = 0
+    for catalog_path in sorted(catalog_paths):
+        norm = _normalize_path_fragment(catalog_path)
+        if not norm:
+            continue
+        if norm in path_to_entry:
+            continue
+        path_to_entry[norm] = {
             "uuid": str(uuid.uuid4()),
-            "name": _safe_catalog_name(normalized_path),
+            "name": _safe_segment(norm.split("/")[-1]),
         }
-        _write_catalog_file(catalog_file_path, header_lines, catalogs_by_path)
-        created = True
+        created += 1
 
-    return catalogs_by_path[normalized_path]["uuid"], created
-
-
-def _id_collection(type_key):
-    mapping = {
-        "MESH": bpy.data.meshes,
-        "MATERIAL": bpy.data.materials,
-        "ACTION": bpy.data.actions,
-        "NODETREE": bpy.data.node_groups,
-        "IMAGE": bpy.data.images,
-        "COLLECTION": bpy.data.collections,
-    }
-    return mapping.get(type_key)
+    _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry)
+    return {path: data["uuid"] for path, data in path_to_entry.items()}, created
 
 
-def _duplicate_groups(type_key):
-    collection = _id_collection(type_key)
-    if collection is None:
-        return {}
+def _iter_target_datablocks(prefs):
+    buckets = []
+    if prefs.target_type == "ALL":
+        buckets = [bpy.data.materials, bpy.data.node_groups, bpy.data.objects, bpy.data.collections]
+    elif prefs.target_type == "MATERIALS":
+        buckets = [bpy.data.materials]
+    elif prefs.target_type == "NODE_GROUPS":
+        buckets = [bpy.data.node_groups]
+    elif prefs.target_type == "OBJECTS_COLLECTIONS":
+        buckets = [bpy.data.objects, bpy.data.collections]
 
-    groups = defaultdict(list)
-    for datablock in collection:
-        groups[_base_name(datablock.name)].append(datablock)
-
-    return {base: blocks for base, blocks in groups.items() if len(blocks) > 1}
-
-
-def _choose_keeper(base_name, datablocks):
-    exact = [item for item in datablocks if item.name == base_name]
-    if exact:
-        return exact[0]
-    return sorted(datablocks, key=lambda item: (item.users, -len(item.name)), reverse=True)[0]
+    for bucket in buckets:
+        for datablock in bucket:
+            yield datablock
 
 
-def _remove_datablock(collection, datablock):
-    try:
-        collection.remove(datablock, do_unlink=True)
-        return True
-    except TypeError:
-        try:
-            collection.remove(datablock)
-            return True
-        except Exception:
-            return False
-    except Exception:
-        return False
+def _source_dir_for_datablock(datablock):
+    linked = getattr(datablock, "library", None)
+    if linked is not None and linked.filepath:
+        library_path = bpy.path.abspath(linked.filepath)
+        return os.path.dirname(os.path.abspath(library_path))
+    if bpy.data.filepath:
+        return os.path.dirname(os.path.abspath(bpy.data.filepath))
+    return None
 
 
-class SMH_DuplicateItem(PropertyGroup):
-    base_name: StringProperty(name="Base Name")
-    keeper_name: StringProperty(name="Keep")
-    duplicate_names: StringProperty(name="Duplicates")
+def _compose_catalog_path(root_prefix, tail):
+    prefix = _normalize_path_fragment(root_prefix)
+    tail_norm = _normalize_path_fragment(tail)
+    if prefix and tail_norm:
+        return f"{prefix}/{tail_norm}"
+    if prefix:
+        return prefix
+    if tail_norm:
+        return tail_norm
+    return "Uncategorized"
 
 
-class SMH_AssetSettings(PropertyGroup):
-    asset_library_root: StringProperty(
-        name="Asset Library Root",
-        description="Folder containing blender_assets.cats.txt",
+def _build_assignment_plan(context, prefs):
+    library_root = _resolve_asset_library_root(context, prefs)
+    if not library_root:
+        raise ValueError("Asset Library Root Folder is empty and current .blend is not saved.")
+
+    plan = []
+    skipped_linked = 0
+    skipped_external = 0
+
+    for datablock in _iter_target_datablocks(prefs):
+        if getattr(datablock, "library", None) is not None:
+            skipped_linked += 1
+            continue
+
+        if prefs.classification_mode == "NAME_PREFIX":
+            tail = _prefix_from_name(datablock.name, prefs.prefix_delimiter)
+        else:
+            src_dir = _source_dir_for_datablock(datablock)
+            if not src_dir:
+                skipped_external += 1
+                continue
+            rel = os.path.relpath(src_dir, library_root)
+            if rel.startswith(".."):
+                skipped_external += 1
+                continue
+            if rel == ".":
+                tail = ""
+            else:
+                segments = [_safe_segment(part) for part in rel.replace("\\", "/").split("/") if part and part != "."]
+                tail = "/".join(segments)
+
+        catalog_path = _compose_catalog_path(prefs.catalog_root_prefix, tail)
+        plan.append((datablock, catalog_path))
+
+    return library_root, plan, skipped_linked, skipped_external
+
+
+class AUTO_CATALOGER_preferences(AddonPreferences):
+    bl_idname = ADDON_ID
+
+    asset_library_root_folder: StringProperty(
+        name="Asset Library Root Folder",
         subtype="DIR_PATH",
-    )
-    source_mode: EnumProperty(
-        name="Source",
-        items=[
-            ("SELECTED", "Selected Assets", "Use selected local assets/data-blocks"),
-            ("FOLDER", "Folder Scan", "Use names from files/folders"),
-        ],
-        default="SELECTED",
-    )
-    scan_folder: StringProperty(
-        name="Scan Folder",
-        description="Folder to scan for names",
-        subtype="DIR_PATH",
-    )
-    scan_recursive: BoolProperty(
-        name="Recursive",
-        description="Scan sub-folders",
-        default=True,
-    )
-    name_pattern: StringProperty(
-        name="Name Pattern (Regex)",
-        description="Regex used to extract category token. Group 1 is preferred",
-        default=r"^([A-Za-z0-9]+)_",
-    )
-    catalog_base_path: StringProperty(
-        name="Catalog Root",
-        description="Root catalog path where auto categories are created",
-        default="Auto",
-    )
-    manual_catalog_path: StringProperty(
-        name="Manual Catalog",
-        description="If set, bulk assign uses this path for all selected assets",
         default="",
     )
-    duplicate_type: EnumProperty(
-        name="Duplicate Type",
+    classification_mode: EnumProperty(
+        name="Classification Mode",
         items=[
-            ("MESH", "Mesh", "Find duplicate meshes"),
-            ("MATERIAL", "Material", "Find duplicate materials"),
-            ("ACTION", "Action", "Find duplicate actions"),
-            ("NODETREE", "Node Group", "Find duplicate node groups"),
-            ("IMAGE", "Image", "Find duplicate images"),
-            ("COLLECTION", "Collection", "Find duplicate collections"),
+            ("NAME_PREFIX", "Name Prefix", "Use asset name prefix"),
+            ("RELATIVE_FOLDER", "Relative Folder Path", "Use folder path relative to root"),
         ],
-        default="MESH",
+        default="NAME_PREFIX",
     )
-    duplicate_items: CollectionProperty(type=SMH_DuplicateItem)
-    duplicate_index: IntProperty(default=0)
-    last_created_catalogs: IntProperty(default=0)
-    last_assigned_assets: IntProperty(default=0)
-    last_duplicate_groups: IntProperty(default=0)
-    last_replaced_assets: IntProperty(default=0)
-
-
-class SMH_UL_duplicate_items(UIList):
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        split = layout.split(factor=0.33)
-        split.label(text=item.base_name)
-        split.label(text=f"keep: {item.keeper_name}")
-        layout.label(text=item.duplicate_names)
-
-
-class SMH_OT_auto_catalog_from_names(Operator):
-    bl_idname = "smh_assets.auto_catalog_from_names"
-    bl_label = "Auto Create Catalogs"
-    bl_description = "Create catalogs from selected asset/folder names using regex pattern"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        settings = context.scene.smh_assets
-        asset_library_root = bpy.path.abspath(settings.asset_library_root).strip()
-        if not asset_library_root:
-            self.report({"ERROR"}, "Set Asset Library Root first.")
-            return {"CANCELLED"}
-
-        try:
-            re.compile(settings.name_pattern)
-        except re.error as exc:
-            self.report({"ERROR"}, f"Invalid regex: {exc}")
-            return {"CANCELLED"}
-
-        if settings.source_mode == "SELECTED":
-            names = [item.name for item in _selected_local_ids(context)]
-        else:
-            folder = bpy.path.abspath(settings.scan_folder).strip()
-            names = _names_from_folder(folder, settings.scan_recursive)
-
-        if not names:
-            self.report({"WARNING"}, "No names found from selected source.")
-            return {"CANCELLED"}
-
-        unique_paths = set()
-        created_count = 0
-        for name in names:
-            catalog_path = _catalog_path_from_name(name, settings.name_pattern, settings.catalog_base_path)
-            if not catalog_path:
-                continue
-            unique_paths.add(catalog_path)
-
-        for catalog_path in sorted(unique_paths):
-            _, created = _ensure_catalog(asset_library_root, catalog_path)
-            if created:
-                created_count += 1
-
-        settings.last_created_catalogs = created_count
-        self.report(
-            {"INFO"},
-            f"Catalogs processed: {len(unique_paths)}, newly created: {created_count}",
-        )
-        return {"FINISHED"}
-
-
-class SMH_OT_bulk_assign_catalog(Operator):
-    bl_idname = "smh_assets.bulk_assign_catalog"
-    bl_label = "Bulk Assign to Catalog"
-    bl_description = "Assign selected assets/data-blocks to catalog in bulk"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        settings = context.scene.smh_assets
-        asset_library_root = bpy.path.abspath(settings.asset_library_root).strip()
-        if not asset_library_root:
-            self.report({"ERROR"}, "Set Asset Library Root first.")
-            return {"CANCELLED"}
-
-        try:
-            re.compile(settings.name_pattern)
-        except re.error as exc:
-            self.report({"ERROR"}, f"Invalid regex: {exc}")
-            return {"CANCELLED"}
-
-        selected_ids = _selected_local_ids(context)
-        if not selected_ids:
-            self.report({"ERROR"}, "No selected local IDs found.")
-            return {"CANCELLED"}
-
-        cache = {}
-        assigned = 0
-        skipped = 0
-
-        for datablock in selected_ids:
-            if settings.manual_catalog_path.strip():
-                catalog_path = _normalize_catalog_path(settings.manual_catalog_path)
-            else:
-                catalog_path = _catalog_path_from_name(
-                    datablock.name,
-                    settings.name_pattern,
-                    settings.catalog_base_path,
-                )
-
-            if not catalog_path:
-                skipped += 1
-                continue
-
-            if catalog_path not in cache:
-                catalog_uuid, _ = _ensure_catalog(asset_library_root, catalog_path)
-                cache[catalog_path] = catalog_uuid
-
-            if getattr(datablock, "asset_data", None) is None:
-                if hasattr(datablock, "asset_mark"):
-                    datablock.asset_mark()
-
-            asset_data = getattr(datablock, "asset_data", None)
-            if asset_data is None:
-                skipped += 1
-                continue
-
-            asset_data.catalog_id = cache[catalog_path]
-            assigned += 1
-
-        settings.last_assigned_assets = assigned
-        self.report({"INFO"}, f"Assigned: {assigned}, skipped: {skipped}")
-        return {"FINISHED"}
-
-
-class SMH_OT_find_duplicates(Operator):
-    bl_idname = "smh_assets.find_duplicates"
-    bl_label = "Find Duplicate Assets"
-    bl_description = "Find duplicated data-block names based on .001 suffix style"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        settings = context.scene.smh_assets
-        groups = _duplicate_groups(settings.duplicate_type)
-
-        settings.duplicate_items.clear()
-        for base in sorted(groups.keys()):
-            keeper = _choose_keeper(base, groups[base])
-            duplicates = [item.name for item in groups[base] if item != keeper]
-
-            row = settings.duplicate_items.add()
-            row.base_name = base
-            row.keeper_name = keeper.name
-            row.duplicate_names = ", ".join(duplicates)
-
-        settings.last_duplicate_groups = len(groups)
-        self.report({"INFO"}, f"Duplicate groups found: {len(groups)}")
-        return {"FINISHED"}
-
-
-class SMH_OT_replace_all_duplicates(Operator):
-    bl_idname = "smh_assets.replace_all_duplicates"
-    bl_label = "Replace All Duplicates"
-    bl_description = "Remap duplicate users to keeper and remove duplicates"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        settings = context.scene.smh_assets
-        collection = _id_collection(settings.duplicate_type)
-        groups = _duplicate_groups(settings.duplicate_type)
-        if not groups:
-            self.report({"INFO"}, "No duplicates found.")
-            settings.last_replaced_assets = 0
-            return {"CANCELLED"}
-
-        replaced = 0
-        failed = 0
-
-        for base, datablocks in groups.items():
-            keeper = _choose_keeper(base, datablocks)
-            for old in datablocks:
-                if old == keeper:
-                    continue
-                try:
-                    old.user_remap(keeper)
-                    if _remove_datablock(collection, old):
-                        replaced += 1
-                    else:
-                        failed += 1
-                except Exception:
-                    failed += 1
-
-        settings.last_replaced_assets = replaced
-        self.report({"INFO"}, f"Replaced: {replaced}, failed: {failed}")
-        return {"FINISHED"}
-
-
-class _SMHPanelMixin:
-    bl_category = "SMH Assets"
-    bl_region_type = "UI"
+    prefix_delimiter: EnumProperty(
+        name="Prefix Delimiter",
+        items=[
+            ("UNDERSCORE", "_", "Split at underscore"),
+            ("DASH", "-", "Split at dash"),
+            ("SPACE", "space", "Split at space"),
+        ],
+        default="UNDERSCORE",
+    )
+    catalog_root_prefix: StringProperty(
+        name="Catalog Root Prefix",
+        default="MyLib/",
+    )
+    target_type: EnumProperty(
+        name="Target Type",
+        items=[
+            ("ALL", "All", "Materials + Node Groups + Objects + Collections"),
+            ("MATERIALS", "Materials", "Materials only"),
+            ("NODE_GROUPS", "Node Groups", "Node groups only"),
+            ("OBJECTS_COLLECTIONS", "Objects&Collections", "Objects and collections only"),
+        ],
+        default="ALL",
+    )
 
     def draw(self, context):
         layout = self.layout
-        settings = context.scene.smh_assets
+        layout.label(text="These settings are reused in the Auto Cataloger panel.")
+        col = layout.column(align=True)
+        col.prop(self, "asset_library_root_folder")
+        col.prop(self, "classification_mode")
+        col.prop(self, "prefix_delimiter")
+        col.prop(self, "catalog_root_prefix")
+        col.prop(self, "target_type")
+
+
+class AUTO_CATALOGER_preview_item(PropertyGroup):
+    asset_name: StringProperty(name="Asset")
+    catalog_path: StringProperty(name="Catalog")
+
+
+class AUTO_CATALOGER_runtime(PropertyGroup):
+    preview_items: CollectionProperty(type=AUTO_CATALOGER_preview_item)
+    preview_index: IntProperty(default=0)
+    preview_total: IntProperty(default=0)
+    preview_catalog_count: IntProperty(default=0)
+    preview_skipped_linked: IntProperty(default=0)
+    preview_skipped_external: IntProperty(default=0)
+
+
+class AUTO_CATALOGER_UL_preview(UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        row.label(text=item.asset_name)
+        row.label(text=item.catalog_path)
+
+
+class AUTO_CATALOGER_OT_preview(Operator):
+    bl_idname = "auto_cataloger.preview"
+    bl_label = "Preview"
+    bl_description = "Preview catalog assignments"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _get_addon_prefs(context)
+        if prefs is None:
+            self.report({"ERROR"}, "Addon preferences not found.")
+            return {"CANCELLED"}
+
+        state = context.scene.auto_cataloger_runtime
+        state.preview_items.clear()
+
+        try:
+            _, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        by_catalog = defaultdict(int)
+        for datablock, catalog_path in plan:
+            by_catalog[catalog_path] += 1
+
+        for datablock, catalog_path in plan[:50]:
+            row = state.preview_items.add()
+            row.asset_name = datablock.name
+            row.catalog_path = catalog_path
+
+        state.preview_total = len(plan)
+        state.preview_catalog_count = len(by_catalog)
+        state.preview_skipped_linked = skipped_linked
+        state.preview_skipped_external = skipped_external
+        self.report({"INFO"}, f"Preview: {len(plan)} assets, {len(by_catalog)} catalogs")
+        return {"FINISHED"}
+
+
+class AUTO_CATALOGER_OT_apply(Operator):
+    bl_idname = "auto_cataloger.apply"
+    bl_label = "Apply"
+    bl_description = "Create catalogs and bulk assign asset catalog IDs"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        prefs = _get_addon_prefs(context)
+        if prefs is None:
+            self.report({"ERROR"}, "Addon preferences not found.")
+            return {"CANCELLED"}
+
+        try:
+            library_root, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        if not plan:
+            self.report({"WARNING"}, "No assignable assets found with current options.")
+            return {"CANCELLED"}
+
+        catalog_paths = sorted({catalog_path for _, catalog_path in plan})
+        uuid_map, created = _ensure_catalogs(library_root, catalog_paths)
+
+        assigned = 0
+        skipped_unmarkable = 0
+        for datablock, catalog_path in plan:
+            if getattr(datablock, "asset_data", None) is None:
+                if hasattr(datablock, "asset_mark"):
+                    datablock.asset_mark()
+            asset_data = getattr(datablock, "asset_data", None)
+            if asset_data is None:
+                skipped_unmarkable += 1
+                continue
+            asset_data.catalog_id = uuid_map[catalog_path]
+            assigned += 1
+
+        state = context.scene.auto_cataloger_runtime
+        state.preview_total = assigned
+        state.preview_catalog_count = len(catalog_paths)
+        state.preview_skipped_linked = skipped_linked
+        state.preview_skipped_external = skipped_external
+
+        self.report(
+            {"INFO"},
+            (
+                f"Applied: {assigned} assets, catalogs: {len(catalog_paths)} "
+                f"(created {created}), skipped linked {skipped_linked}, "
+                f"skipped out-of-root {skipped_external}, unmarkable {skipped_unmarkable}"
+            ),
+        )
+        return {"FINISHED"}
+
+
+class AUTO_CATALOGER_PT_panel(Panel):
+    bl_idname = "AUTO_CATALOGER_PT_panel"
+    bl_label = "Auto Cataloger"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Auto Cataloger"
+
+    def draw(self, context):
+        layout = self.layout
+        prefs = _get_addon_prefs(context)
+        state = context.scene.auto_cataloger_runtime
+
+        if prefs is None:
+            layout.label(text="Addon preferences not available.")
+            return
+
+        col = layout.column(align=True)
+        col.prop(prefs, "asset_library_root_folder")
+        col.prop(prefs, "classification_mode")
+        col.prop(prefs, "prefix_delimiter")
+        col.prop(prefs, "catalog_root_prefix")
+        col.prop(prefs, "target_type")
+
+        row = layout.row(align=True)
+        row.operator("auto_cataloger.preview", text="Preview", icon="HIDE_OFF")
+        row.operator("auto_cataloger.apply", text="Apply", icon="CHECKMARK")
 
         box = layout.box()
-        box.label(text="Catalog Automation")
-        box.prop(settings, "asset_library_root")
-        box.prop(settings, "source_mode")
-
-        if settings.source_mode == "FOLDER":
-            box.prop(settings, "scan_folder")
-            box.prop(settings, "scan_recursive")
-
-        box.prop(settings, "name_pattern")
-        box.prop(settings, "catalog_base_path")
-        box.operator("smh_assets.auto_catalog_from_names", icon="OUTLINER_COLLECTION")
-
-        box.separator()
-        box.prop(settings, "manual_catalog_path")
-        box.operator("smh_assets.bulk_assign_catalog", icon="ASSET_MANAGER")
-
-        stats = box.column(align=True)
-        stats.label(text=f"Created catalogs: {settings.last_created_catalogs}")
-        stats.label(text=f"Assigned assets: {settings.last_assigned_assets}")
-
-        dup = layout.box()
-        dup.label(text="Duplicate Replace")
-        dup.prop(settings, "duplicate_type")
-        row = dup.row(align=True)
-        row.operator("smh_assets.find_duplicates", icon="VIEWZOOM")
-        row.operator("smh_assets.replace_all_duplicates", icon="AUTOMERGE_ON")
-
-        dup.label(text=f"Groups found: {settings.last_duplicate_groups}")
-        dup.label(text=f"Replaced: {settings.last_replaced_assets}")
-
-        dup.template_list(
-            "SMH_UL_duplicate_items",
+        box.label(text=f"Preview assets: {state.preview_total}")
+        box.label(text=f"Catalogs: {state.preview_catalog_count}")
+        box.label(text=f"Skipped linked: {state.preview_skipped_linked}")
+        box.label(text=f"Skipped out-of-root: {state.preview_skipped_external}")
+        box.template_list(
+            "AUTO_CATALOGER_UL_preview",
             "",
-            settings,
-            "duplicate_items",
-            settings,
-            "duplicate_index",
-            rows=5,
+            state,
+            "preview_items",
+            state,
+            "preview_index",
+            rows=6,
         )
 
 
-class SMH_PT_assets_view3d(_SMHPanelMixin, Panel):
-    bl_idname = "SMH_PT_assets_view3d"
-    bl_label = "SMH Asset Bulk Manager"
-    bl_space_type = "VIEW_3D"
-
-
-class SMH_PT_assets_browser(_SMHPanelMixin, Panel):
-    bl_idname = "SMH_PT_assets_browser"
-    bl_label = "SMH Asset Bulk Manager"
-    bl_space_type = "FILE_BROWSER"
-
-    @classmethod
-    def poll(cls, context):
-        area = getattr(context, "area", None)
-        return area is not None and getattr(area, "ui_type", "") == "ASSETS"
-
-
 classes = (
-    SMH_DuplicateItem,
-    SMH_AssetSettings,
-    SMH_UL_duplicate_items,
-    SMH_OT_auto_catalog_from_names,
-    SMH_OT_bulk_assign_catalog,
-    SMH_OT_find_duplicates,
-    SMH_OT_replace_all_duplicates,
-    SMH_PT_assets_view3d,
-    SMH_PT_assets_browser,
+    AUTO_CATALOGER_preferences,
+    AUTO_CATALOGER_preview_item,
+    AUTO_CATALOGER_runtime,
+    AUTO_CATALOGER_UL_preview,
+    AUTO_CATALOGER_OT_preview,
+    AUTO_CATALOGER_OT_apply,
+    AUTO_CATALOGER_PT_panel,
 )
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.smh_assets = PointerProperty(type=SMH_AssetSettings)
+    bpy.types.Scene.auto_cataloger_runtime = PointerProperty(type=AUTO_CATALOGER_runtime)
 
 
 def unregister():
-    del bpy.types.Scene.smh_assets
+    del bpy.types.Scene.auto_cataloger_runtime
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
