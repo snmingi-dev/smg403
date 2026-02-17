@@ -14,10 +14,12 @@ import os
 import re
 import shutil
 import uuid
+import hashlib
 from collections import defaultdict
 
 import bpy
 from bpy.props import (
+    BoolProperty,
     CollectionProperty,
     EnumProperty,
     IntProperty,
@@ -145,34 +147,62 @@ def _ensure_catalogs(asset_library_root, catalog_paths):
         }
         created += 1
 
-    _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry)
+    if created > 0:
+        _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry)
     return {path: data["uuid"] for path, data in path_to_entry.items()}, created
 
 
 def _iter_target_datablocks(prefs):
     buckets = []
     if prefs.target_type == "ALL":
-        buckets = [bpy.data.materials, bpy.data.node_groups, bpy.data.objects, bpy.data.collections]
+        buckets = [
+            ("Materials", bpy.data.materials),
+            ("Node_Groups", bpy.data.node_groups),
+            ("Objects", bpy.data.objects),
+            ("Collections", bpy.data.collections),
+        ]
     elif prefs.target_type == "MATERIALS":
-        buckets = [bpy.data.materials]
+        buckets = [("Materials", bpy.data.materials)]
     elif prefs.target_type == "NODE_GROUPS":
-        buckets = [bpy.data.node_groups]
+        buckets = [("Node_Groups", bpy.data.node_groups)]
     elif prefs.target_type == "OBJECTS_COLLECTIONS":
-        buckets = [bpy.data.objects, bpy.data.collections]
+        buckets = [("Objects", bpy.data.objects), ("Collections", bpy.data.collections)]
 
-    for bucket in buckets:
+    for type_segment, bucket in buckets:
         for datablock in bucket:
-            yield datablock
+            yield datablock, type_segment
+
+
+def _source_file_for_datablock(datablock):
+    linked = getattr(datablock, "library", None)
+    if linked is not None and linked.filepath:
+        return os.path.abspath(bpy.path.abspath(linked.filepath))
+
+    weak_ref = getattr(datablock, "library_weak_reference", None)
+    weak_path = getattr(weak_ref, "filepath", "") if weak_ref is not None else ""
+    if weak_path:
+        return os.path.abspath(bpy.path.abspath(weak_path))
+
+    datablock_data = getattr(datablock, "data", None)
+    if datablock_data is not None:
+        data_linked = getattr(datablock_data, "library", None)
+        if data_linked is not None and data_linked.filepath:
+            return os.path.abspath(bpy.path.abspath(data_linked.filepath))
+        data_weak_ref = getattr(datablock_data, "library_weak_reference", None)
+        data_weak_path = getattr(data_weak_ref, "filepath", "") if data_weak_ref is not None else ""
+        if data_weak_path:
+            return os.path.abspath(bpy.path.abspath(data_weak_path))
+
+    return None
 
 
 def _source_dir_for_datablock(datablock):
-    linked = getattr(datablock, "library", None)
-    if linked is not None and linked.filepath:
-        library_path = bpy.path.abspath(linked.filepath)
-        return os.path.dirname(os.path.abspath(library_path))
+    source_file = _source_file_for_datablock(datablock)
+    if source_file:
+        return os.path.dirname(source_file), False
     if bpy.data.filepath:
-        return os.path.dirname(os.path.abspath(bpy.data.filepath))
-    return None
+        return os.path.dirname(os.path.abspath(bpy.data.filepath)), True
+    return None, False
 
 
 def _compose_catalog_path(root_prefix, tail):
@@ -187,6 +217,21 @@ def _compose_catalog_path(root_prefix, tail):
     return "Uncategorized"
 
 
+def _plan_signature(prefs, plan):
+    digest = hashlib.sha1()
+    digest.update(prefs.asset_library_root_folder.encode("utf-8"))
+    digest.update(prefs.classification_mode.encode("utf-8"))
+    digest.update(prefs.prefix_delimiter.encode("utf-8"))
+    digest.update(prefs.catalog_root_prefix.encode("utf-8"))
+    digest.update(prefs.target_type.encode("utf-8"))
+    for datablock, catalog_path in plan:
+        digest.update(datablock.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(catalog_path.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _build_assignment_plan(context, prefs):
     library_root = _resolve_asset_library_root(context, prefs)
     if not library_root:
@@ -196,7 +241,7 @@ def _build_assignment_plan(context, prefs):
     skipped_linked = 0
     skipped_external = 0
 
-    for datablock in _iter_target_datablocks(prefs):
+    for datablock, type_segment in _iter_target_datablocks(prefs):
         if getattr(datablock, "library", None) is not None:
             skipped_linked += 1
             continue
@@ -204,7 +249,7 @@ def _build_assignment_plan(context, prefs):
         if prefs.classification_mode == "NAME_PREFIX":
             tail = _prefix_from_name(datablock.name, prefs.prefix_delimiter)
         else:
-            src_dir = _source_dir_for_datablock(datablock)
+            src_dir, from_blend_fallback = _source_dir_for_datablock(datablock)
             if not src_dir:
                 skipped_external += 1
                 continue
@@ -213,9 +258,11 @@ def _build_assignment_plan(context, prefs):
                 skipped_external += 1
                 continue
             if rel == ".":
-                tail = ""
+                tail = _safe_segment(type_segment) if from_blend_fallback else ""
             else:
                 segments = [_safe_segment(part) for part in rel.replace("\\", "/").split("/") if part and part != "."]
+                if from_blend_fallback:
+                    segments.append(_safe_segment(type_segment))
                 tail = "/".join(segments)
 
         catalog_path = _compose_catalog_path(prefs.catalog_root_prefix, tail)
@@ -287,6 +334,8 @@ class AUTO_CATALOGER_runtime(PropertyGroup):
     preview_catalog_count: IntProperty(default=0)
     preview_skipped_linked: IntProperty(default=0)
     preview_skipped_external: IntProperty(default=0)
+    preview_ready: BoolProperty(default=False)
+    preview_signature: StringProperty(default="")
 
 
 class AUTO_CATALOGER_UL_preview(UIList):
@@ -310,6 +359,8 @@ class AUTO_CATALOGER_OT_preview(Operator):
 
         state = context.scene.auto_cataloger_runtime
         state.preview_items.clear()
+        state.preview_ready = False
+        state.preview_signature = ""
 
         try:
             _, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
@@ -330,6 +381,8 @@ class AUTO_CATALOGER_OT_preview(Operator):
         state.preview_catalog_count = len(by_catalog)
         state.preview_skipped_linked = skipped_linked
         state.preview_skipped_external = skipped_external
+        state.preview_signature = _plan_signature(prefs, plan)
+        state.preview_ready = True
         self.report({"INFO"}, f"Preview: {len(plan)} assets, {len(by_catalog)} catalogs")
         return {"FINISHED"}
 
@@ -346,10 +399,20 @@ class AUTO_CATALOGER_OT_apply(Operator):
             self.report({"ERROR"}, "Addon preferences not found.")
             return {"CANCELLED"}
 
+        state = context.scene.auto_cataloger_runtime
+
         try:
             library_root, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        plan_sig = _plan_signature(prefs, plan)
+        if not state.preview_ready:
+            self.report({"ERROR"}, "Run Preview first.")
+            return {"CANCELLED"}
+        if state.preview_signature != plan_sig:
+            self.report({"ERROR"}, "Options or target set changed. Run Preview again.")
             return {"CANCELLED"}
 
         if not plan:
@@ -372,11 +435,12 @@ class AUTO_CATALOGER_OT_apply(Operator):
             asset_data.catalog_id = uuid_map[catalog_path]
             assigned += 1
 
-        state = context.scene.auto_cataloger_runtime
         state.preview_total = assigned
         state.preview_catalog_count = len(catalog_paths)
         state.preview_skipped_linked = skipped_linked
         state.preview_skipped_external = skipped_external
+        state.preview_ready = False
+        state.preview_signature = ""
 
         self.report(
             {"INFO"},
@@ -419,6 +483,7 @@ class AUTO_CATALOGER_PT_panel(Panel):
         box = layout.box()
         box.label(text=f"Preview assets: {state.preview_total}")
         box.label(text=f"Catalogs: {state.preview_catalog_count}")
+        box.label(text=f"Preview ready: {'Yes' if state.preview_ready else 'No'}")
         box.label(text=f"Skipped linked: {state.preview_skipped_linked}")
         box.label(text=f"Skipped out-of-root: {state.preview_skipped_external}")
         box.template_list(

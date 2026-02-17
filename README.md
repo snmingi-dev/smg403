@@ -7,6 +7,7 @@ Blender add-on MVP for fast Asset Browser catalog operations.
 - Current `.blend` assets are auto-classified by rules.
 - Catalogs are created in `blender_assets.cats.txt`.
 - Assets are bulk assigned to generated catalogs.
+- `Apply` requires a fresh `Preview` with unchanged options/targets.
 
 ## UI
 
@@ -25,9 +26,15 @@ Blender add-on MVP for fast Asset Browser catalog operations.
 
 - Blender compatibility: 4.3 LTS and 5.0+
 - Undo support on apply
-- CDF backup: `blender_assets.cats.txt.bak` before write
+- CDF backup: `blender_assets.cats.txt.bak` before write (only when catalog file changes)
 - Settings saved via Add-on Preferences
 - GPL licensed
+
+## Relative Folder Mode Notes
+
+- First tries per-asset source path from `library_weak_reference` / linked library path.
+- If unavailable, falls back to current `.blend` path and appends data type segment
+  (`Materials`, `Node_Groups`, `Objects`, `Collections`).
 
 ## Non-goals
 
