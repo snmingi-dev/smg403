@@ -41,3 +41,8 @@ Blender add-on MVP for fast Asset Browser catalog operations.
 1. Blender > `Edit > Preferences > Add-ons > Install...`
 2. Select `smh_asset_bulk_manager.py`
 3. Enable add-on
+
+## Other Project
+
+- `post-unwrap-cleaner/`:
+  `Post-Unwrap Cleaner` (UV Editor one-click cleanup addon MVP)
