@@ -92,8 +92,13 @@ def _asset_library_items(self, context):
         )
     ]
 
-    prefs_context = context if context is not None else bpy.context
-    preferences = getattr(prefs_context, "preferences", None)
+    if context is None:
+        # Blender may call dynamic enum callbacks during registration without context.
+        _ASSET_LIBRARY_ENUM_CACHE.clear()
+        _ASSET_LIBRARY_ENUM_CACHE.extend(items)
+        return _ASSET_LIBRARY_ENUM_CACHE
+
+    preferences = getattr(context, "preferences", None)
     filepaths = getattr(preferences, "filepaths", None)
     libs = getattr(filepaths, "asset_libraries", []) if filepaths is not None else []
 
@@ -123,7 +128,9 @@ def _resolve_registered_library_root(context, prefs):
     if prefs.asset_library_name == MANUAL_LIBRARY_KEY:
         return None
 
-    libs = getattr(context.preferences.filepaths, "asset_libraries", [])
+    preferences = getattr(context, "preferences", None)
+    filepaths = getattr(preferences, "filepaths", None)
+    libs = getattr(filepaths, "asset_libraries", []) if filepaths is not None else []
     for lib in libs:
         candidate = os.path.abspath(bpy.path.abspath(lib.path).strip())
         candidate_id = _library_item_id_for_path(candidate)
@@ -359,7 +366,6 @@ class AUTO_CATALOGER_preferences(AddonPreferences):
         name="Asset Library",
         description="Use a registered Asset Library from Blender Preferences",
         items=_asset_library_items,
-        default=MANUAL_LIBRARY_KEY,
     )
     asset_library_root_folder: StringProperty(
         name="Asset Library Root Folder",
