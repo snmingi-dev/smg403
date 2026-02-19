@@ -34,11 +34,13 @@ from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup, UIList
 ADDON_ID = __name__
 CATALOG_FILE_NAME = "blender_assets.cats.txt"
 MANUAL_LIBRARY_KEY = "__MANUAL__"
+REGISTERED_LIBRARY_PREFIX = "LIB_"
 DEFAULT_HEADER_LINES = [
     "# This is an Asset Catalog Definition file for Blender.",
     "# Managed by Auto Cataloger.",
     "VERSION 1",
 ]
+_ASSET_LIBRARY_ENUM_CACHE = []
 
 
 def _normalize_path_fragment(value):
@@ -76,6 +78,11 @@ def _addon_prefs(context):
     return addon.preferences
 
 
+def _library_item_id_for_path(abs_path):
+    digest = hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:12].upper()
+    return f"{REGISTERED_LIBRARY_PREFIX}{digest}"
+
+
 def _asset_library_items(self, context):
     items = [
         (
@@ -86,28 +93,41 @@ def _asset_library_items(self, context):
     ]
 
     prefs_context = context if context is not None else bpy.context
-    libs = getattr(prefs_context.preferences.filepaths, "asset_libraries", [])
+    preferences = getattr(prefs_context, "preferences", None)
+    filepaths = getattr(preferences, "filepaths", None)
+    libs = getattr(filepaths, "asset_libraries", []) if filepaths is not None else []
+
+    used_ids = {MANUAL_LIBRARY_KEY}
     for lib in libs:
-        lib_path = bpy.path.abspath(lib.path).strip()
+        lib_path = os.path.abspath(bpy.path.abspath(lib.path).strip())
         if not lib_path:
             continue
+
+        item_id = _library_item_id_for_path(lib_path)
+        if item_id in used_ids:
+            continue
+        used_ids.add(item_id)
+
         display_name = lib.name.strip() if lib.name else os.path.basename(lib_path)
         if not display_name:
             display_name = lib_path
-        items.append((lib_path, display_name, lib_path))
+        items.append((item_id, display_name, lib_path))
 
-    return items
+    # Keep strong refs for Blender dynamic enum callback lifecycle.
+    _ASSET_LIBRARY_ENUM_CACHE.clear()
+    _ASSET_LIBRARY_ENUM_CACHE.extend(items)
+    return _ASSET_LIBRARY_ENUM_CACHE
 
 
 def _resolve_registered_library_root(context, prefs):
     if prefs.asset_library_name == MANUAL_LIBRARY_KEY:
         return None
 
-    selected = os.path.abspath(bpy.path.abspath(prefs.asset_library_name))
     libs = getattr(context.preferences.filepaths, "asset_libraries", [])
     for lib in libs:
-        candidate = os.path.abspath(bpy.path.abspath(lib.path))
-        if candidate == selected:
+        candidate = os.path.abspath(bpy.path.abspath(lib.path).strip())
+        candidate_id = _library_item_id_for_path(candidate)
+        if candidate_id == prefs.asset_library_name:
             return candidate
     return None
 
