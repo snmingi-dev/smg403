@@ -20,22 +20,38 @@ function Convert-ToSlug {
 }
 
 $projectResolved = (Resolve-Path $ProjectPath).Path
-$pyFiles = @(Get-ChildItem -Path $projectResolved -File -Filter *.py)
-if ($pyFiles.Count -ne 1) {
-    throw "Expected exactly one .py addon entry file in '$projectResolved'. Found $($pyFiles.Count)."
-}
+$rootPyFiles = @(Get-ChildItem -Path $projectResolved -File -Filter *.py)
+$packageDirs = @(
+    Get-ChildItem -Path $projectResolved -Directory |
+    Where-Object { Test-Path (Join-Path $_.FullName "__init__.py") }
+)
 
-$entryFile = $pyFiles[0]
-$content = Get-Content -Path $entryFile.FullName -Raw
+$entryType = ""
+$entryPath = ""
+$content = ""
+
+if ($rootPyFiles.Count -eq 1 -and $packageDirs.Count -eq 0) {
+    $entryType = "single_file"
+    $entryPath = $rootPyFiles[0].FullName
+    $content = Get-Content -Path $entryPath -Raw
+}
+elseif ($rootPyFiles.Count -eq 0 -and $packageDirs.Count -eq 1) {
+    $entryType = "package"
+    $entryPath = $packageDirs[0].FullName
+    $content = Get-Content -Path (Join-Path $entryPath "__init__.py") -Raw
+}
+else {
+    throw "Expected either exactly one root .py addon file OR one package folder containing __init__.py in '$projectResolved'. Found root .py: $($rootPyFiles.Count), package dirs: $($packageDirs.Count)."
+}
 
 $nameMatch = [regex]::Match($content, '"name"\s*:\s*"([^"]+)"')
 if (-not $nameMatch.Success) {
-    throw "Could not parse bl_info name from $($entryFile.Name)"
+    throw "Could not parse bl_info name from addon entry."
 }
 
 $versionMatch = [regex]::Match($content, '"version"\s*:\s*\(([^)]+)\)')
 if (-not $versionMatch.Success) {
-    throw "Could not parse bl_info version from $($entryFile.Name)"
+    throw "Could not parse bl_info version from addon entry."
 }
 
 $productName = $nameMatch.Groups[1].Value
@@ -51,7 +67,17 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("smg403_pack_" + [guid]
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {
-    Copy-Item -Path $entryFile.FullName -Destination (Join-Path $tempRoot $entryFile.Name)
+    if ($entryType -eq "single_file") {
+        $entryName = [System.IO.Path]::GetFileName($entryPath)
+        Copy-Item -Path $entryPath -Destination (Join-Path $tempRoot $entryName)
+    }
+    elseif ($entryType -eq "package") {
+        $packageName = Split-Path -Path $entryPath -Leaf
+        Copy-Item -Path $entryPath -Destination (Join-Path $tempRoot $packageName) -Recurse
+    }
+    else {
+        throw "Unknown entry type: $entryType"
+    }
 
     $zipName = "$productSlug-$version.zip"
     $zipPath = Join-Path $distResolved $zipName
@@ -61,7 +87,13 @@ try {
 
     Compress-Archive -Path (Join-Path $tempRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
     Write-Output "Packaged: $zipPath"
-    Write-Output "Entry: $($entryFile.Name)"
+    Write-Output "Entry type: $entryType"
+    if ($entryType -eq "single_file") {
+        Write-Output "Entry: $([System.IO.Path]::GetFileName($entryPath))"
+    }
+    else {
+        Write-Output "Entry: $(Split-Path -Path $entryPath -Leaf)\__init__.py"
+    }
 }
 finally {
     if (Test-Path $tempRoot) {

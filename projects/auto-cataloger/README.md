@@ -10,9 +10,9 @@ Rules-based Asset Browser catalog assignment tool for Blender library maintenanc
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` or use `smh_asset_bulk_manager.py` directly.
+1. Build ZIP with `scripts/package_addons.ps1` (contains `auto_cataloger/__init__.py`).
 2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select ZIP (recommended) or `.py`.
+3. Select the generated ZIP.
 4. Enable `Auto Cataloger`.
 
 ## Usage Flow
