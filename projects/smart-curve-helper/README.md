@@ -27,6 +27,7 @@ Bezier handle quality-of-life toolset for curve editing.
 ## Safety & Recovery
 
 - All operators require `EDIT_CURVE`.
+- `Strength` is capped at `1.0` to avoid overshoot during align/flatten/equalize.
 - Errors are standardized for invalid mode, missing Bezier targets, and missing view region.
 - Undo is supported and should be validated after each operator.
 - Handle type is applied after each transformation step.

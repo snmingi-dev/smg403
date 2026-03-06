@@ -19,6 +19,7 @@ Issue tracker: `https://github.com/snmingi-dev/smg403/issues`
 Official release artifact per product is a ZIP containing one addon package folder with `__init__.py`.
 
 If a project includes `README.market.md`, the packaging script bundles it into the ZIP as `README.md` together with the repository `LICENSE`.
+The packaging script also generates an extension-ready ZIP when `blender_manifest.toml` is present in the addon package.
 
 ```powershell
 pwsh .\scripts\package_addons.ps1 -ProjectPath .\projects\auto-cataloger
@@ -27,6 +28,7 @@ pwsh .\scripts\package_addons.ps1 -ProjectPath .\projects\auto-cataloger
 Output:
 
 - `dist/<product-name>-<version>.zip`
+- `dist/<product-name>-<version>-extension.zip`
 
 Installation in Blender:
 

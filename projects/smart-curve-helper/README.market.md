@@ -25,6 +25,7 @@
 ## Safety
 
 - All operators require `EDIT_CURVE`.
+- `Strength` is capped at `1.0` to avoid overshoot.
 - Undo is supported for all three operators.
 
 ## Limitations

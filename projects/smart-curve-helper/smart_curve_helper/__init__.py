@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Smart Curve Helper",
     "author": "SMG Tools",
-    "version": (1, 1, 2),
+    "version": (1, 1, 3),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Smart Curve Helper",
     "description": "Align, flatten, and equalize Bezier handles quickly.",
@@ -176,7 +176,7 @@ class SCH_Settings(PropertyGroup):
     strength: FloatProperty(
         name="Strength",
         min=0.0,
-        max=2.0,
+        max=1.0,
         default=1.0,
     )
     target: EnumProperty(

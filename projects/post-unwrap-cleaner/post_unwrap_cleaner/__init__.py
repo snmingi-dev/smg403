@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 2),
+    "version": (1, 1, 3),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -107,11 +107,15 @@ def _prepare_target_selection(bm, uv_layer, target, respect_pins):
     return target_loops, skipped_pins
 
 
-def _straighten_selected_loops(loops, uv_layer, threshold):
+def _straighten_selected_loops(loops, uv_layer, threshold, respect_pins):
     adjusted = 0
     for loop in loops:
         luv_a = loop[uv_layer]
         luv_b = loop.link_loop_next[uv_layer]
+        if not (luv_a.select and luv_b.select):
+            continue
+        if respect_pins and (luv_a.pin_uv or luv_b.pin_uv):
+            continue
         dx = luv_b.uv.x - luv_a.uv.x
         dy = luv_b.uv.y - luv_a.uv.y
         adx = abs(dx)
@@ -129,6 +133,25 @@ def _straighten_selected_loops(loops, uv_layer, threshold):
             luv_b.uv.y = snap_y
             adjusted += 1
     return adjusted
+
+
+def _pack_islands_kwargs(margin, respect_pins):
+    kwargs = {"margin": margin}
+    if not respect_pins:
+        return kwargs
+
+    prop_map = bpy.ops.uv.pack_islands.get_rna_type().properties
+    prop_ids = {prop.identifier for prop in prop_map}
+
+    if "pin" in prop_ids:
+        kwargs["pin"] = True
+
+    if "pin_method" in prop_ids:
+        enum_ids = {item.identifier for item in prop_map["pin_method"].enum_items}
+        if "LOCKED" in enum_ids:
+            kwargs["pin_method"] = "LOCKED"
+
+    return kwargs
 
 
 class PUC_Settings(PropertyGroup):
@@ -234,6 +257,7 @@ class PUC_OT_one_click_clean(Operator):
                     loops=loops,
                     uv_layer=uv_layer,
                     threshold=settings.straighten_threshold,
+                    respect_pins=settings.respect_pins,
                 )
 
             bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
@@ -249,7 +273,12 @@ class PUC_OT_one_click_clean(Operator):
                     bpy.ops.uv.minimize_stretch(iterations=settings.relax_iterations)
                     relaxed = True
                 if settings.run_pack:
-                    bpy.ops.uv.pack_islands(margin=settings.packing_margin)
+                    bpy.ops.uv.pack_islands(
+                        **_pack_islands_kwargs(
+                            margin=settings.packing_margin,
+                            respect_pins=settings.respect_pins,
+                        )
+                    )
                     packed = True
 
         except RuntimeError as exc:

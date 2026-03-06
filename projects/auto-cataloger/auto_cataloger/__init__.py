@@ -16,7 +16,7 @@
 bl_info = {
     "name": "auto_cataloger",
     "author": "SMG Tools",
-    "version": (1, 1, 2),
+    "version": (1, 1, 3),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
     "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
@@ -647,26 +647,34 @@ class AUTO_CATALOGER_OT_apply(Operator):
             return {"CANCELLED"}
 
         catalog_paths = sorted({catalog_path for _, catalog_path in plan})
-        uuid_map, created = _ensure_catalogs(root, catalog_paths)
+        try:
+            uuid_map, created = _ensure_catalogs(root, catalog_paths)
+        except OSError as exc:
+            self.report({"ERROR"}, f"Catalog write failed: {exc}")
+            return {"CANCELLED"}
 
         assigned = 0
         auto_marked = 0
         auto_mark_failed = 0
         for datablock, catalog_path in plan:
-            asset_data = getattr(datablock, "asset_data", None)
-            if asset_data is None and prefs.auto_mark_missing_as_assets and hasattr(datablock, "asset_mark"):
-                datablock.asset_mark()
+            try:
                 asset_data = getattr(datablock, "asset_data", None)
-                if asset_data is not None:
-                    auto_marked += 1
-                else:
-                    auto_mark_failed += 1
+                if asset_data is None and prefs.auto_mark_missing_as_assets and hasattr(datablock, "asset_mark"):
+                    datablock.asset_mark()
+                    asset_data = getattr(datablock, "asset_data", None)
+                    if asset_data is not None:
+                        auto_marked += 1
+                    else:
+                        auto_mark_failed += 1
 
-            if asset_data is None:
-                continue
+                if asset_data is None:
+                    continue
 
-            asset_data.catalog_id = uuid_map[catalog_path]
-            assigned += 1
+                asset_data.catalog_id = uuid_map[catalog_path]
+                assigned += 1
+            except (OSError, RuntimeError, KeyError) as exc:
+                self.report({"ERROR"}, f"Asset assignment failed for '{datablock.name}': {exc}")
+                return {"CANCELLED"}
 
         state.preview_total = assigned
         state.preview_catalog_count = len(catalog_paths)

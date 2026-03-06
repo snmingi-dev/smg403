@@ -26,6 +26,8 @@
 
 - UV selection state is restored after execution.
 - `Respect Pins` is ON by default.
+- `Respect Pins` excludes pinned UVs from the prepared target selection.
+- Pack-stage pin locking is requested when supported by the current Blender build.
 - Undo is supported for mesh and UV changes.
 
 ## Limitations
