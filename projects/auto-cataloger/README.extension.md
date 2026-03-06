@@ -1,6 +1,6 @@
 # Auto Cataloger
 
-`Auto Cataloger` legacy ZIP for manual add-on installation in Blender.
+`Auto Cataloger` extension ZIP for Blender Extensions installation.
 
 ## Version Status
 
@@ -10,10 +10,10 @@
 ## Installation
 
 1. Open Blender.
-2. Go to `Edit > Preferences > Add-ons`.
-3. Click `Install...`.
+2. Go to `Edit > Preferences > Get Extensions`.
+3. Open the top-right menu and choose `Install from Disk`.
 4. Select this ZIP file.
-5. Enable `Auto Cataloger`.
+5. Enable `Auto Cataloger` if Blender does not enable it automatically.
 
 ## Quick Start
 
@@ -26,11 +26,10 @@
 
 ## Safety and Recovery
 
+- This extension manages `blender_assets.cats.txt` and `.bak` files inside the chosen Asset Library root.
 - Default behavior processes only datablocks already marked as assets.
 - `Auto-Mark Missing as Assets` is OFF by default.
-- External catalog changes are written to `blender_assets.cats.txt`.
 - Blender Undo does not revert external `.cats` file changes.
-- A `.bak` file is created alongside the catalog file.
 - `Restore from .bak` swaps the current `.cats` file with the backup so the restore action itself is reversible.
 
 ## Limitations

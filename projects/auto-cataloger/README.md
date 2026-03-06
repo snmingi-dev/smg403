@@ -2,18 +2,22 @@
 
 Rules-based Asset Browser catalog assignment tool for Blender library maintenance.
 
-## Current Submission Status
+## Version Status
 
-- Current resubmission target
-- Verified in Blender 4.5.5 LTS
-- Blender 4.2 LTS and 5.0 verification still pending for this release
+- Verified: Blender 4.5.5 LTS
+- Target support: Blender 4.2 LTS - 5.0
+
+## Build Outputs
+
+- `dist/auto-cataloger-<version>-extension.zip`: primary Blender Extensions bundle
+- `dist/auto-cataloger-<version>.zip`: legacy manual-install fallback
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` (contains `auto_cataloger/__init__.py`, `LICENSE`, and buyer `README.md`).
-2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select the generated ZIP.
-4. Enable `auto_cataloger`.
+1. Build ZIPs with `scripts/package_addons.ps1`.
+2. For the extension ZIP: `Edit > Preferences > Get Extensions > Install from Disk`.
+3. For the legacy ZIP: `Edit > Preferences > Add-ons > Install...`.
+4. Enable `Auto Cataloger`.
 
 ## Usage Flow
 
@@ -41,7 +45,7 @@ Rules-based Asset Browser catalog assignment tool for Blender library maintenanc
 
 - Linked datablocks are skipped.
 - Relative folder mode depends on available source path metadata.
-- Relative folder mode skips datablocks that resolve outside the chosen library root.
+- Relative folder mode skips datablocks that resolve outside the chosen library root or across different Windows drives.
 - Preview list is capped to 50 rows for UI performance.
 
 ## Demo Files

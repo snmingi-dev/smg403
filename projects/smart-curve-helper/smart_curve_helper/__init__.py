@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Smart Curve Helper",
     "author": "SMG Tools",
-    "version": (1, 1, 3),
+    "version": (1, 1, 4),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Smart Curve Helper",
     "description": "Align, flatten, and equalize Bezier handles quickly.",

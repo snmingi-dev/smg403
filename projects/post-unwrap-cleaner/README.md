@@ -2,17 +2,21 @@
 
 UV Editor one-click cleanup pipeline for post-unwrap workflows.
 
-## Supported Blender Versions
+## Version Status
 
-- 4.2 LTS
-- 4.5 LTS
-- 5.0
+- Verified: Blender 4.5.5 LTS
+- Target support: Blender 4.2 LTS - 5.0
+
+## Build Outputs
+
+- `dist/post-unwrap-cleaner-<version>-extension.zip`: primary Blender Extensions bundle
+- `dist/post-unwrap-cleaner-<version>.zip`: legacy manual-install fallback
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` (contains `post_unwrap_cleaner/__init__.py`).
-2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select the generated ZIP.
+1. Build ZIPs with `scripts/package_addons.ps1`.
+2. For the extension ZIP: `Edit > Preferences > Get Extensions > Install from Disk`.
+3. For the legacy ZIP: `Edit > Preferences > Add-ons > Install...`.
 4. Enable `Post-Unwrap Cleaner`.
 
 ## Usage Flow
@@ -35,6 +39,7 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 
 - Multi-object Edit Mode is intentionally blocked.
 - Operator expects UV Editor region context.
+- `Selected UV Selection` uses the current UV selection and does not expand by island flood-fill.
 - Advanced unwrap generation and baking are out of scope.
 
 ## Demo Files

@@ -14,9 +14,9 @@
 # See the GNU General Public License for more details.
 
 bl_info = {
-    "name": "auto_cataloger",
+    "name": "Auto Cataloger",
     "author": "SMG Tools",
-    "version": (1, 1, 3),
+    "version": (1, 1, 4),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
     "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
@@ -44,7 +44,7 @@ from bpy.props import (
 from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup, UIList
 
 
-ADDON_ID = __name__
+ADDON_ID = __package__ or __name__
 CATALOG_FILE_NAME = "blender_assets.cats.txt"
 MANUAL_LIBRARY_KEY = "__MANUAL__"
 REGISTERED_LIBRARY_PREFIX = "LIB_"
@@ -371,7 +371,10 @@ def _catalog_path_for_datablock(datablock, type_segment, prefs, library_root):
     if not src_dir:
         return None
 
-    rel = os.path.relpath(src_dir, library_root)
+    try:
+        rel = os.path.relpath(src_dir, library_root)
+    except ValueError:
+        return None
     if rel.startswith(".."):
         return None
 

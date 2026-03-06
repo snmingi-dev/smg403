@@ -1,6 +1,6 @@
 # Post-Unwrap Cleaner
 
-`Post-Unwrap Cleaner` legacy ZIP for manual add-on installation in Blender.
+`Post-Unwrap Cleaner` extension ZIP for Blender Extensions installation.
 
 ## Version Status
 
@@ -10,10 +10,10 @@
 ## Installation
 
 1. Open Blender.
-2. Go to `Edit > Preferences > Add-ons`.
-3. Click `Install...`.
+2. Go to `Edit > Preferences > Get Extensions`.
+3. Open the top-right menu and choose `Install from Disk`.
 4. Select this ZIP file.
-5. Enable `Post-Unwrap Cleaner`.
+5. Enable `Post-Unwrap Cleaner` if Blender does not enable it automatically.
 
 ## Quick Start
 

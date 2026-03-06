@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 3),
+    "version": (1, 1, 4),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -179,7 +179,7 @@ class PUC_Settings(PropertyGroup):
     target: EnumProperty(
         name="Target",
         items=[
-            ("SELECTED", "Selected Islands", "Process selected islands only"),
+            ("SELECTED", "Selected UV Selection", "Process the current UV selection only"),
             ("ALL", "All Islands", "Process all islands"),
         ],
         default="SELECTED",

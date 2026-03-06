@@ -100,6 +100,18 @@ function Test-PortableZipEntries {
     }
 }
 
+function Resolve-FirstExistingPath {
+    param([string[]]$Candidates)
+
+    foreach ($candidate in $Candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
 function Copy-AddonPayload {
     param(
         [Parameter(Mandatory = $true)]
@@ -203,7 +215,10 @@ New-Item -ItemType Directory -Force -Path $distResolved | Out-Null
 
 $licensePath = Join-Path $repoRoot "LICENSE"
 $marketReadmePath = Join-Path $projectResolved "README.market.md"
+$extensionReadmePath = Join-Path $projectResolved "README.extension.md"
 $releaseReadmePath = Join-Path $projectResolved "README.release.md"
+$legacyBundleReadme = Resolve-FirstExistingPath @($marketReadmePath, $releaseReadmePath)
+$extensionBundleReadme = Resolve-FirstExistingPath @($extensionReadmePath, $marketReadmePath, $releaseReadmePath)
 $manifestPath = if ($entryType -eq "package") {
     Join-Path $entryPath "blender_manifest.toml"
 } else {
@@ -222,11 +237,8 @@ try {
         Copy-Item -Path $licensePath -Destination (Join-Path $tempLegacyRoot "LICENSE")
     }
 
-    if (Test-Path $marketReadmePath) {
-        Copy-Item -Path $marketReadmePath -Destination (Join-Path $tempLegacyRoot "README.md")
-    }
-    elseif (Test-Path $releaseReadmePath) {
-        Copy-Item -Path $releaseReadmePath -Destination (Join-Path $tempLegacyRoot "README.md")
+    if ($legacyBundleReadme) {
+        Copy-Item -Path $legacyBundleReadme -Destination (Join-Path $tempLegacyRoot "README.md")
     }
 
     $legacyZipName = "$productSlug-$version.zip"
@@ -243,7 +255,7 @@ try {
         Write-Output "Entry: $(Split-Path -Path $entryPath -Leaf)/__init__.py"
     }
     Write-Output "Includes LICENSE: $(Test-Path $licensePath)"
-    Write-Output "Includes buyer README: $((Test-Path $marketReadmePath) -or (Test-Path $releaseReadmePath))"
+    Write-Output "Includes buyer README: $($null -ne $legacyBundleReadme)"
 
     if (Test-Path $manifestPath) {
         Copy-ExtensionPayload -EntryType $entryType -EntryPath $entryPath -DestinationRoot $tempExtensionRoot
@@ -252,11 +264,8 @@ try {
             Copy-Item -Path $licensePath -Destination (Join-Path $tempExtensionRoot "LICENSE")
         }
 
-        if (Test-Path $marketReadmePath) {
-            Copy-Item -Path $marketReadmePath -Destination (Join-Path $tempExtensionRoot "README.md")
-        }
-        elseif (Test-Path $releaseReadmePath) {
-            Copy-Item -Path $releaseReadmePath -Destination (Join-Path $tempExtensionRoot "README.md")
+        if ($extensionBundleReadme) {
+            Copy-Item -Path $extensionBundleReadme -Destination (Join-Path $tempExtensionRoot "README.md")
         }
 
         $extensionZipName = "$productSlug-$version-extension.zip"

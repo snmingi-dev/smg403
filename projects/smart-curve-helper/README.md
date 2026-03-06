@@ -2,17 +2,21 @@
 
 Bezier handle quality-of-life toolset for curve editing.
 
-## Supported Blender Versions
+## Version Status
 
-- 4.2 LTS
-- 4.5 LTS
-- 5.0
+- Verified: Blender 4.5.5 LTS
+- Target support: Blender 4.2 LTS - 5.0
+
+## Build Outputs
+
+- `dist/smart-curve-helper-<version>-extension.zip`: primary Blender Extensions bundle
+- `dist/smart-curve-helper-<version>.zip`: legacy manual-install fallback
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` (contains `smart_curve_helper/__init__.py`).
-2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select the generated ZIP.
+1. Build ZIPs with `scripts/package_addons.ps1`.
+2. For the extension ZIP: `Edit > Preferences > Get Extensions > Install from Disk`.
+3. For the legacy ZIP: `Edit > Preferences > Add-ons > Install...`.
 4. Enable `Smart Curve Helper`.
 
 ## Usage Flow
