@@ -1,9 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Auto Cataloger
+# Copyright (C) 2026 SMG Tools
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
 
 bl_info = {
     "name": "auto_cataloger",
     "author": "SMG Tools",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
     "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
@@ -93,7 +106,6 @@ def _asset_library_items(self, context):
     ]
 
     if context is None:
-        # Blender may call dynamic enum callbacks during registration without context.
         _ASSET_LIBRARY_ENUM_CACHE.clear()
         _ASSET_LIBRARY_ENUM_CACHE.extend(items)
         return _ASSET_LIBRARY_ENUM_CACHE
@@ -118,7 +130,6 @@ def _asset_library_items(self, context):
             display_name = lib_path
         items.append((item_id, display_name, lib_path))
 
-    # Keep strong refs for Blender dynamic enum callback lifecycle.
     _ASSET_LIBRARY_ENUM_CACHE.clear()
     _ASSET_LIBRARY_ENUM_CACHE.extend(items)
     return _ASSET_LIBRARY_ENUM_CACHE
@@ -140,18 +151,24 @@ def _resolve_registered_library_root(context, prefs):
 
 
 def _resolve_asset_library_root(context, prefs):
-    registered = _resolve_registered_library_root(context, prefs)
-    if registered:
-        return registered, "REGISTERED"
+    if prefs.asset_library_name != MANUAL_LIBRARY_KEY:
+        registered = _resolve_registered_library_root(context, prefs)
+        if registered:
+            return registered, "REGISTERED", ""
+        return None, "REGISTERED_MISSING", "Selected Asset Library could not be resolved."
 
     manual = bpy.path.abspath(prefs.asset_library_root_folder).strip()
     if manual:
-        return os.path.abspath(manual), "MANUAL"
+        return os.path.abspath(manual), "MANUAL", ""
 
-    if bpy.data.filepath:
-        return os.path.dirname(os.path.abspath(bpy.data.filepath)), "BLEND"
+    return None, "NONE", "Choose a registered Asset Library or set Asset Library Root Folder."
 
-    return None, "NONE"
+
+def _require_asset_library_root(context, prefs):
+    root, root_source, error_message = _resolve_asset_library_root(context, prefs)
+    if not root:
+        raise ValueError(error_message)
+    return root, root_source
 
 
 def _delimiter_token(delimiter_enum):
@@ -202,17 +219,60 @@ def _read_catalog_file(catalog_file_path):
     return headers, path_to_entry
 
 
-def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
-    if os.path.exists(catalog_file_path):
-        shutil.copy2(catalog_file_path, catalog_file_path + ".bak")
-
+def _catalog_file_payload(headers, path_to_entry):
     lines = [line.rstrip() for line in headers]
     for catalog_path in sorted(path_to_entry.keys()):
         entry = path_to_entry[catalog_path]
         lines.append(f"{entry['uuid']}:{catalog_path}:{entry['name']}")
+    return "\n".join(lines) + "\n"
 
-    with open(catalog_file_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write("\n".join(lines) + "\n")
+
+def _write_text_atomic(file_path, payload):
+    temp_path = f"{file_path}.tmp.{uuid.uuid4().hex}"
+    try:
+        with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+        os.replace(temp_path, file_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
+    backup_file_path = catalog_file_path + ".bak"
+    payload = _catalog_file_payload(headers, path_to_entry)
+
+    if os.path.exists(catalog_file_path):
+        shutil.copy2(catalog_file_path, backup_file_path)
+
+    _write_text_atomic(catalog_file_path, payload)
+
+    if not os.path.exists(backup_file_path):
+        shutil.copy2(catalog_file_path, backup_file_path)
+
+
+def _restore_catalog_from_backup(catalog_file_path, backup_file_path):
+    temp_current = f"{catalog_file_path}.restore_tmp"
+    had_current = os.path.exists(catalog_file_path)
+
+    if os.path.exists(temp_current):
+        os.remove(temp_current)
+
+    if had_current:
+        os.replace(catalog_file_path, temp_current)
+
+    try:
+        shutil.copy2(backup_file_path, catalog_file_path)
+        if had_current and os.path.exists(temp_current):
+            os.replace(temp_current, backup_file_path)
+        elif not os.path.exists(backup_file_path):
+            shutil.copy2(catalog_file_path, backup_file_path)
+    except Exception:
+        if os.path.exists(catalog_file_path):
+            os.remove(catalog_file_path)
+        if had_current and os.path.exists(temp_current):
+            os.replace(temp_current, catalog_file_path)
+        raise
 
 
 def _ensure_catalogs(asset_library_root, catalog_paths):
@@ -302,6 +362,30 @@ def _compose_catalog_path(root_prefix, tail):
     return "Uncategorized"
 
 
+def _catalog_path_for_datablock(datablock, type_segment, prefs, library_root):
+    if prefs.classification_mode == "NAME_PREFIX":
+        tail = _prefix_from_name(datablock.name, prefs.prefix_delimiter)
+        return _compose_catalog_path(prefs.catalog_root_prefix, tail)
+
+    src_dir, from_blend_fallback = _source_dir_for_datablock(datablock)
+    if not src_dir:
+        return None
+
+    rel = os.path.relpath(src_dir, library_root)
+    if rel.startswith(".."):
+        return None
+
+    if rel == ".":
+        tail = _safe_segment(type_segment) if from_blend_fallback else ""
+    else:
+        segments = [_safe_segment(part) for part in rel.replace("\\", "/").split("/") if part and part != "."]
+        if from_blend_fallback:
+            segments.append(_safe_segment(type_segment))
+        tail = "/".join(segments)
+
+    return _compose_catalog_path(prefs.catalog_root_prefix, tail)
+
+
 def _plan_signature(prefs, root, plan):
     digest = hashlib.sha1()
     digest.update(root.encode("utf-8"))
@@ -321,42 +405,57 @@ def _plan_signature(prefs, root, plan):
 
 
 def _build_assignment_plan(context, prefs):
-    library_root, root_source = _resolve_asset_library_root(context, prefs)
-    if not library_root:
-        raise ValueError("Asset Library Root is empty and current .blend is not saved.")
+    library_root, root_source = _require_asset_library_root(context, prefs)
 
-    plan = []
+    assignable_plan = []
     skipped_linked = 0
     skipped_external = 0
+    skipped_non_assets = 0
+    will_auto_mark = 0
 
     for datablock, type_segment in _iter_target_datablocks(prefs):
         if getattr(datablock, "library", None) is not None:
             skipped_linked += 1
             continue
 
-        if prefs.classification_mode == "NAME_PREFIX":
-            tail = _prefix_from_name(datablock.name, prefs.prefix_delimiter)
-        else:
-            src_dir, from_blend_fallback = _source_dir_for_datablock(datablock)
-            if not src_dir:
-                skipped_external += 1
-                continue
-            rel = os.path.relpath(src_dir, library_root)
-            if rel.startswith(".."):
-                skipped_external += 1
-                continue
-            if rel == ".":
-                tail = _safe_segment(type_segment) if from_blend_fallback else ""
+        catalog_path = _catalog_path_for_datablock(datablock, type_segment, prefs, library_root)
+        if not catalog_path:
+            skipped_external += 1
+            continue
+
+        asset_data = getattr(datablock, "asset_data", None)
+        can_mark = hasattr(datablock, "asset_mark")
+        if asset_data is None:
+            if prefs.auto_mark_missing_as_assets and can_mark:
+                will_auto_mark += 1
             else:
-                segments = [_safe_segment(part) for part in rel.replace("\\", "/").split("/") if part and part != "."]
-                if from_blend_fallback:
-                    segments.append(_safe_segment(type_segment))
-                tail = "/".join(segments)
+                skipped_non_assets += 1
+                continue
 
-        catalog_path = _compose_catalog_path(prefs.catalog_root_prefix, tail)
-        plan.append((datablock, catalog_path))
+        assignable_plan.append((datablock, catalog_path))
 
-    return library_root, root_source, plan, skipped_linked, skipped_external
+    return (
+        library_root,
+        root_source,
+        assignable_plan,
+        skipped_linked,
+        skipped_external,
+        skipped_non_assets,
+        will_auto_mark,
+    )
+
+
+def _clear_preview_state(state):
+    state.preview_items.clear()
+    state.preview_index = 0
+    state.preview_total = 0
+    state.preview_catalog_count = 0
+    state.preview_skipped_linked = 0
+    state.preview_skipped_external = 0
+    state.preview_skipped_non_assets = 0
+    state.preview_will_auto_mark = 0
+    state.preview_ready = False
+    state.preview_signature = ""
 
 
 class AUTO_CATALOGER_preferences(AddonPreferences):
@@ -434,6 +533,8 @@ class AUTO_CATALOGER_runtime(PropertyGroup):
     preview_catalog_count: IntProperty(default=0)
     preview_skipped_linked: IntProperty(default=0)
     preview_skipped_external: IntProperty(default=0)
+    preview_skipped_non_assets: IntProperty(default=0)
+    preview_will_auto_mark: IntProperty(default=0)
     preview_ready: BoolProperty(default=False)
     preview_signature: StringProperty(default="")
     last_root: StringProperty(default="")
@@ -460,12 +561,18 @@ class AUTO_CATALOGER_OT_preview(Operator):
             return {"CANCELLED"}
 
         state = context.scene.auto_cataloger_runtime
-        state.preview_items.clear()
-        state.preview_ready = False
-        state.preview_signature = ""
+        _clear_preview_state(state)
 
         try:
-            root, root_source, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+            (
+                root,
+                root_source,
+                plan,
+                skipped_linked,
+                skipped_external,
+                skipped_non_assets,
+                will_auto_mark,
+            ) = _build_assignment_plan(context, prefs)
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -483,12 +590,20 @@ class AUTO_CATALOGER_OT_preview(Operator):
         state.preview_catalog_count = len(by_catalog)
         state.preview_skipped_linked = skipped_linked
         state.preview_skipped_external = skipped_external
+        state.preview_skipped_non_assets = skipped_non_assets
+        state.preview_will_auto_mark = will_auto_mark
         state.preview_signature = _plan_signature(prefs, root, plan)
         state.preview_ready = True
         state.last_root = root
         state.last_root_source = root_source
 
-        self.report({"INFO"}, f"Preview: {len(plan)} assets, {len(by_catalog)} catalogs")
+        self.report(
+            {"INFO"},
+            (
+                f"Preview: {len(plan)} assignable, {len(by_catalog)} catalogs, "
+                f"skipped non-assets {skipped_non_assets}, will auto-mark {will_auto_mark}"
+            ),
+        )
         return {"FINISHED"}
 
 
@@ -507,7 +622,15 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state = context.scene.auto_cataloger_runtime
 
         try:
-            root, root_source, plan, skipped_linked, skipped_external = _build_assignment_plan(context, prefs)
+            (
+                root,
+                root_source,
+                plan,
+                skipped_linked,
+                skipped_external,
+                skipped_non_assets,
+                will_auto_mark,
+            ) = _build_assignment_plan(context, prefs)
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -527,8 +650,8 @@ class AUTO_CATALOGER_OT_apply(Operator):
         uuid_map, created = _ensure_catalogs(root, catalog_paths)
 
         assigned = 0
-        skipped_unmarked = 0
         auto_marked = 0
+        auto_mark_failed = 0
         for datablock, catalog_path in plan:
             asset_data = getattr(datablock, "asset_data", None)
             if asset_data is None and prefs.auto_mark_missing_as_assets and hasattr(datablock, "asset_mark"):
@@ -536,9 +659,10 @@ class AUTO_CATALOGER_OT_apply(Operator):
                 asset_data = getattr(datablock, "asset_data", None)
                 if asset_data is not None:
                     auto_marked += 1
+                else:
+                    auto_mark_failed += 1
 
             if asset_data is None:
-                skipped_unmarked += 1
                 continue
 
             asset_data.catalog_id = uuid_map[catalog_path]
@@ -548,6 +672,8 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state.preview_catalog_count = len(catalog_paths)
         state.preview_skipped_linked = skipped_linked
         state.preview_skipped_external = skipped_external
+        state.preview_skipped_non_assets = skipped_non_assets
+        state.preview_will_auto_mark = will_auto_mark
         state.preview_ready = False
         state.preview_signature = ""
         state.last_root = root
@@ -556,9 +682,10 @@ class AUTO_CATALOGER_OT_apply(Operator):
         self.report(
             {"INFO"},
             (
-                f"Applied: {assigned} assets, catalogs: {len(catalog_paths)} (created {created}), "
+                f"Applied: {assigned} assignable, catalogs: {len(catalog_paths)} (created {created}), "
+                f"auto-marked {auto_marked}, auto-mark failed {auto_mark_failed}, "
                 f"skipped linked {skipped_linked}, skipped out-of-root {skipped_external}, "
-                f"skipped non-assets {skipped_unmarked}, auto-marked {auto_marked}"
+                f"skipped non-assets {skipped_non_assets}"
             ),
         )
         return {"FINISHED"}
@@ -567,7 +694,7 @@ class AUTO_CATALOGER_OT_apply(Operator):
 class AUTO_CATALOGER_OT_restore_backup(Operator):
     bl_idname = "auto_cataloger.restore_backup"
     bl_label = "Restore from .bak"
-    bl_description = "Restore blender_assets.cats.txt from blender_assets.cats.txt.bak"
+    bl_description = "Swap current blender_assets.cats.txt with blender_assets.cats.txt.bak"
     bl_options = {"REGISTER"}
 
     def invoke(self, context, event):
@@ -579,9 +706,10 @@ class AUTO_CATALOGER_OT_restore_backup(Operator):
             self.report({"ERROR"}, "Addon preferences not found.")
             return {"CANCELLED"}
 
-        root, _ = _resolve_asset_library_root(context, prefs)
-        if not root:
-            self.report({"ERROR"}, "Cannot resolve Asset Library Root.")
+        try:
+            root, _ = _require_asset_library_root(context, prefs)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
         catalog_file, backup_file = _catalog_paths_for_root(root)
@@ -590,7 +718,12 @@ class AUTO_CATALOGER_OT_restore_backup(Operator):
             return {"CANCELLED"}
 
         os.makedirs(root, exist_ok=True)
-        shutil.copy2(backup_file, catalog_file)
+        try:
+            _restore_catalog_from_backup(catalog_file, backup_file)
+        except OSError as exc:
+            self.report({"ERROR"}, f"Restore failed: {exc}")
+            return {"CANCELLED"}
+
         self.report({"INFO"}, f"Restored catalog file from backup: {backup_file}")
         return {"FINISHED"}
 
@@ -611,7 +744,7 @@ class AUTO_CATALOGER_PT_panel(Panel):
             layout.label(text="Addon preferences not available.")
             return
 
-        root, root_source = _resolve_asset_library_root(context, prefs)
+        root, root_source, root_error = _resolve_asset_library_root(context, prefs)
         catalog_file = ""
         backup_file = ""
         if root:
@@ -639,18 +772,20 @@ class AUTO_CATALOGER_PT_panel(Panel):
             safety.label(text=f".cats: {catalog_file}")
             safety.label(text=f".bak: {backup_file}")
         else:
-            safety.label(text="Root not resolved yet.")
+            safety.label(text=root_error or "Root not resolved yet.")
         restore_row = safety.row(align=True)
         restore_row.enabled = bool(backup_file and os.path.exists(backup_file))
         restore_row.operator("auto_cataloger.restore_backup", icon="LOOP_BACK")
-        safety.label(text="Note: Blender Undo does not revert external .cats file changes.")
+        safety.label(text="Blender Undo does not revert external .cats file changes.")
 
         box = layout.box()
-        box.label(text=f"Preview assets: {state.preview_total}")
+        box.label(text=f"Preview assignable: {state.preview_total}")
         box.label(text=f"Catalogs: {state.preview_catalog_count}")
         box.label(text=f"Preview ready: {'Yes' if state.preview_ready else 'No'}")
         box.label(text=f"Skipped linked: {state.preview_skipped_linked}")
         box.label(text=f"Skipped out-of-root: {state.preview_skipped_external}")
+        box.label(text=f"Skipped non-assets: {state.preview_skipped_non_assets}")
+        box.label(text=f"Will auto-mark: {state.preview_will_auto_mark}")
         box.template_list(
             "AUTO_CATALOGER_UL_preview",
             "",
@@ -681,7 +816,8 @@ def register():
 
 
 def unregister():
-    del bpy.types.Scene.auto_cataloger_runtime
+    if hasattr(bpy.types.Scene, "auto_cataloger_runtime"):
+        del bpy.types.Scene.auto_cataloger_runtime
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 

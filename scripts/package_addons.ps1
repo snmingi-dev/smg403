@@ -66,6 +66,10 @@ New-Item -ItemType Directory -Force -Path $distResolved | Out-Null
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("smg403_pack_" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
+$licensePath = Join-Path $repoRoot "LICENSE"
+$marketReadmePath = Join-Path $projectResolved "README.market.md"
+$releaseReadmePath = Join-Path $projectResolved "README.release.md"
+
 try {
     if ($entryType -eq "single_file") {
         $entryName = [System.IO.Path]::GetFileName($entryPath)
@@ -77,6 +81,17 @@ try {
     }
     else {
         throw "Unknown entry type: $entryType"
+    }
+
+    if (Test-Path $licensePath) {
+        Copy-Item -Path $licensePath -Destination (Join-Path $tempRoot "LICENSE")
+    }
+
+    if (Test-Path $marketReadmePath) {
+        Copy-Item -Path $marketReadmePath -Destination (Join-Path $tempRoot "README.md")
+    }
+    elseif (Test-Path $releaseReadmePath) {
+        Copy-Item -Path $releaseReadmePath -Destination (Join-Path $tempRoot "README.md")
     }
 
     $zipName = "$productSlug-$version.zip"
@@ -94,6 +109,8 @@ try {
     else {
         Write-Output "Entry: $(Split-Path -Path $entryPath -Leaf)\__init__.py"
     }
+    Write-Output "Includes LICENSE: $(Test-Path $licensePath)"
+    Write-Output "Includes buyer README: $((Test-Path $marketReadmePath) -or (Test-Path $releaseReadmePath))"
 }
 finally {
     if (Test-Path $tempRoot) {

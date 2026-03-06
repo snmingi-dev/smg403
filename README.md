@@ -2,13 +2,15 @@
 
 Repository for individually sold Blender add-ons by **SMG Tools**.
 
+Current market resubmission scope: **Auto Cataloger** only.
+
 ## Product Index
 
-| Product | Project Path | Install File | Supported Blender | Support |
+| Product | Project Path | Install File | Current Status | Support |
 |---|---|---|---|---|
-| Auto Cataloger | `projects/auto-cataloger/` | `auto_cataloger/__init__.py` | 4.2 LTS, 4.5 LTS, 5.0 | support@smgtools.dev |
-| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner.py` | 4.2 LTS, 4.5 LTS, 5.0 | support@smgtools.dev |
-| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper.py` | 4.2 LTS, 4.5 LTS, 5.0 | support@smgtools.dev |
+| Auto Cataloger | `projects/auto-cataloger/` | `auto_cataloger/__init__.py` | Verified in Blender 4.5.5 LTS; 4.2/5.0 pending | support@smgtools.dev |
+| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner.py` | Not in current resubmission scope | support@smgtools.dev |
+| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper.py` | Not in current resubmission scope | support@smgtools.dev |
 
 Issue tracker: `https://github.com/snmingi-dev/smg403/issues`
 
@@ -18,6 +20,8 @@ Official release artifact per product is a ZIP containing one addon entry:
 
 - single `.py` file, or
 - one package folder with `__init__.py`.
+
+If a project includes `README.market.md`, the packaging script bundles it into the ZIP as `README.md` together with the repository `LICENSE`.
 
 ```powershell
 pwsh .\scripts\package_addons.ps1 -ProjectPath .\projects\auto-cataloger
@@ -35,7 +39,7 @@ Installation in Blender:
 
 ## QA Matrix
 
-Manual test matrix and release checklist:
+Submission verification notes:
 
 - `docs/QA_MATRIX.md`
 
