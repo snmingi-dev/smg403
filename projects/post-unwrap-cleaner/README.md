@@ -10,9 +10,9 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` or use `post_unwrap_cleaner.py` directly.
+1. Build ZIP with `scripts/package_addons.ps1` (contains `post_unwrap_cleaner/__init__.py`).
 2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select ZIP (recommended) or `.py`.
+3. Select the generated ZIP.
 4. Enable `Post-Unwrap Cleaner`.
 
 ## Usage Flow
@@ -34,12 +34,6 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 - Multi-object Edit Mode is intentionally blocked.
 - Operator expects UV Editor region context.
 - Advanced unwrap generation and baking are out of scope.
-
-## Before/After Captures
-
-- Place screenshots/GIF here:
-- `demo/before-after.gif`
-- `demo/one-click-flow.gif`
 
 ## Demo Files
 

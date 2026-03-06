@@ -10,9 +10,9 @@ Bezier handle quality-of-life toolset for curve editing.
 
 ## Install
 
-1. Build ZIP with `scripts/package_addons.ps1` or use `smart_curve_helper.py` directly.
+1. Build ZIP with `scripts/package_addons.ps1` (contains `smart_curve_helper/__init__.py`).
 2. Blender > `Edit > Preferences > Add-ons > Install...`
-3. Select ZIP (recommended) or `.py`.
+3. Select the generated ZIP.
 4. Enable `Smart Curve Helper`.
 
 ## Usage Flow
@@ -36,12 +36,6 @@ Bezier handle quality-of-life toolset for curve editing.
 - NURBS splines are ignored.
 - `Axis=View` and `Axis Space=View` require an active 3D View region.
 - Active point reference uses current selected control point fallback behavior.
-
-## Before/After Captures
-
-- Place screenshots/GIF here:
-- `demo/before-after.gif`
-- `demo/curve-ops-flow.gif`
 
 ## Demo Files
 

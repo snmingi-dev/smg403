@@ -9,17 +9,14 @@ Current market resubmission scope: **Auto Cataloger** only.
 | Product | Project Path | Install File | Current Status | Support |
 |---|---|---|---|---|
 | Auto Cataloger | `projects/auto-cataloger/` | `auto_cataloger/__init__.py` | Verified in Blender 4.5.5 LTS; 4.2/5.0 pending | support@smgtools.dev |
-| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner.py` | Not in current resubmission scope | support@smgtools.dev |
-| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper.py` | Not in current resubmission scope | support@smgtools.dev |
+| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner/__init__.py` | Package install verified in Blender 4.5.5 LTS; deeper runtime QA pending | support@smgtools.dev |
+| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper/__init__.py` | Package install verified in Blender 4.5.5 LTS; deeper runtime QA pending | support@smgtools.dev |
 
 Issue tracker: `https://github.com/snmingi-dev/smg403/issues`
 
 ## Packaging
 
-Official release artifact per product is a ZIP containing one addon entry:
-
-- single `.py` file, or
-- one package folder with `__init__.py`.
+Official release artifact per product is a ZIP containing one addon package folder with `__init__.py`.
 
 If a project includes `README.market.md`, the packaging script bundles it into the ZIP as `README.md` together with the repository `LICENSE`.
 

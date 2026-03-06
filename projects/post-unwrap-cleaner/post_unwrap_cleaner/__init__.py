@@ -1,9 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Post-Unwrap Cleaner
+# Copyright (C) 2026 SMG Tools
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
 
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -303,7 +316,8 @@ def register():
 
 
 def unregister():
-    del bpy.types.Scene.puc_settings
+    if hasattr(bpy.types.Scene, "puc_settings"):
+        del bpy.types.Scene.puc_settings
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
