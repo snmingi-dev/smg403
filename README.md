@@ -9,8 +9,8 @@ Current market resubmission scope: **Auto Cataloger** only.
 | Product | Project Path | Install File | Current Status | Support |
 |---|---|---|---|---|
 | Auto Cataloger | `projects/auto-cataloger/` | `auto_cataloger/__init__.py` | Verified in Blender 4.5.5 LTS; 4.2/5.0 pending | support@smgtools.dev |
-| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner/__init__.py` | Package install verified in Blender 4.5.5 LTS; deeper runtime QA pending | support@smgtools.dev |
-| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper/__init__.py` | Package install verified in Blender 4.5.5 LTS; deeper runtime QA pending | support@smgtools.dev |
+| Post-Unwrap Cleaner | `projects/post-unwrap-cleaner/` | `post_unwrap_cleaner/__init__.py` | Basic runtime QA verified in Blender 4.5.5 LTS; 4.2/5.0 pending | support@smgtools.dev |
+| Smart Curve Helper | `projects/smart-curve-helper/` | `smart_curve_helper/__init__.py` | Basic runtime QA verified in Blender 4.5.5 LTS; 4.2/5.0 pending | support@smgtools.dev |
 
 Issue tracker: `https://github.com/snmingi-dev/smg403/issues`
 

@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Smart Curve Helper",
     "author": "SMG Tools",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Smart Curve Helper",
     "description": "Align, flatten, and equalize Bezier handles quickly.",
@@ -109,6 +109,11 @@ def _active_point_or_first(points):
 def _set_handle_type(point, handle_type):
     point.handle_left_type = handle_type
     point.handle_right_type = handle_type
+
+
+def _refresh_curve_data(context, obj):
+    obj.data.update_tag()
+    context.view_layer.update()
 
 
 def _flatten_vector(value, axis_vec, target_dot, strength):
@@ -237,7 +242,7 @@ class SCH_OT_align_handles(Operator):
 
             _set_handle_type(point, settings.handle_type)
 
-        obj.data.update()
+        _refresh_curve_data(context, obj)
         self.report({"INFO"}, f"Aligned {len(points)} points")
         return {"FINISHED"}
 
@@ -283,7 +288,7 @@ class SCH_OT_flatten(Operator):
             point.handle_right = _flatten_vector(point.handle_right, axis_vec, target_dot, settings.strength)
             _set_handle_type(point, settings.handle_type)
 
-        obj.data.update()
+        _refresh_curve_data(context, obj)
         self.report({"INFO"}, f"Flattened {len(points)} points")
         return {"FINISHED"}
 
@@ -339,7 +344,7 @@ class SCH_OT_equalize_length(Operator):
 
             _set_handle_type(point, settings.handle_type)
 
-        obj.data.update()
+        _refresh_curve_data(context, obj)
         self.report({"INFO"}, f"Equalized {len(points)} points")
         return {"FINISHED"}
 

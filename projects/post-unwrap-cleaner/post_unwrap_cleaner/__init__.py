@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -43,6 +43,15 @@ def _get_uv_window_region(area):
         if region.type == "WINDOW":
             return region
     return None
+
+
+def _uv_context_ok(context):
+    area = context.area
+    if area is None or area.type != "IMAGE_EDITOR":
+        return False
+    if getattr(area, "ui_type", "") != "UV":
+        return False
+    return _get_edit_mesh_object(context) is not None
 
 
 def _snapshot_uv_selection_state(bm, uv_layer):
@@ -171,10 +180,7 @@ class PUC_OT_one_click_clean(Operator):
 
     @classmethod
     def poll(cls, context):
-        area = context.area
-        if area is None or area.type != "IMAGE_EDITOR":
-            return False
-        return _get_edit_mesh_object(context) is not None
+        return _uv_context_ok(context)
 
     def execute(self, context):
         settings = context.scene.puc_settings
@@ -275,10 +281,7 @@ class PUC_PT_uv_sidebar(Panel):
 
     @classmethod
     def poll(cls, context):
-        area = context.area
-        if area is None or area.type != "IMAGE_EDITOR":
-            return False
-        return getattr(area, "ui_type", "") in {"UV", "IMAGE_EDITOR"}
+        return _uv_context_ok(context)
 
     def draw(self, context):
         layout = self.layout
