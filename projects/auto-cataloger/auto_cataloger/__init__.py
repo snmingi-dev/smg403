@@ -263,6 +263,11 @@ def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
         _write_text_atomic(catalog_file_path, payload)
         return
 
+    # Preserve an existing recovery point if the live catalog is missing.
+    if os.path.exists(backup_file_path):
+        _write_text_atomic(catalog_file_path, payload)
+        return
+
     temp_catalog_path = f"{catalog_file_path}.tmp.{uuid.uuid4().hex}"
     temp_backup_path = f"{backup_file_path}.tmp.{uuid.uuid4().hex}"
     backup_published = False
@@ -795,6 +800,10 @@ class AUTO_CATALOGER_OT_restore_backup(Operator):
         except OSError as exc:
             self.report({"ERROR"}, f"Restore failed: {exc}")
             return {"CANCELLED"}
+
+        state = getattr(context.scene, "auto_cataloger_runtime", None)
+        if state is not None:
+            _clear_preview_state(state)
 
         self.report({"INFO"}, f"Restored catalog file from backup: {backup_file}")
         return {"FINISHED"}
