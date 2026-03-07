@@ -26,6 +26,8 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 3. Configure optional step toggles (`Straighten`, `Relax`, `Pack`).
 4. Click `One-Click Clean`.
 
+Requires an existing UV map.
+
 ## Safety & Recovery
 
 - UV selection state is restored after execution.
@@ -41,6 +43,7 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 - Multi-object Edit Mode is intentionally blocked.
 - Operator expects UV Editor region context.
 - `Selected UV Selection` uses the current UV selection and does not expand by island flood-fill.
+- Requires an existing UV map before execution.
 - Advanced unwrap generation and baking are out of scope.
 
 ## Demo Files

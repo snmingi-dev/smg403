@@ -23,6 +23,8 @@
 4. Set threshold, relax iterations, packing margin, and target scope.
 5. Click `One-Click Clean`.
 
+Requires an existing UV map.
+
 ## Safety
 
 - UV selection state is restored after execution.
@@ -37,6 +39,7 @@
 - Multi-object Edit Mode is not supported.
 - The tool is intended for the UV Editor workflow only.
 - `Selected UV Selection` uses the current UV selection and does not expand by island flood-fill.
+- Requires an existing UV map before execution.
 
 ## Support
 

@@ -24,6 +24,8 @@
 5. Review the assignable count, skip counts, and planned catalog paths.
 6. Click `Apply`.
 
+`Catalog Root Prefix` is used for catalog path segments and cannot contain `:` or line breaks.
+
 ## Safety and Recovery
 
 - Default behavior processes only datablocks already marked as assets.
@@ -33,7 +35,9 @@
 - Blender Undo does not revert external `.cats` file changes.
 - A `.bak` file is created alongside the catalog file.
 - `Restore from .bak` swaps the current `.cats` file with the backup so the restore action itself is reversible.
-- If some datablocks fail during `Apply`, the operator can finish with partial results. Review the status message and use Undo to revert internal changes if needed.
+- If some datablocks fail during `Apply`, the operator can finish with partial results.
+- Follow the status message:
+  Use Undo for internal changes and `Restore from .bak` for external catalog changes when requested.
 
 ## Limitations
 

@@ -29,6 +29,8 @@ Rules-based Asset Browser catalog assignment tool for Blender library maintenanc
 6. Check assignable count, skip counts, and preview list.
 7. Click `Apply`.
 
+`Catalog Root Prefix` is used for catalog path segments and cannot contain `:` or line breaks.
+
 ## Safety & Recovery
 
 - `Apply` requires a fresh `Preview` signature match.
@@ -41,7 +43,9 @@ Rules-based Asset Browser catalog assignment tool for Blender library maintenanc
 - On the first write, `.bak` is a snapshot of the first generated catalog file.
 - UI includes `Restore from .bak`, which swaps current and backup files so restore is reversible.
 - Blender Undo does not revert external `.cats` file edits.
-- If some datablocks fail during `Apply`, the operator can finish with partial results. Review the status message and use Undo to revert internal changes if needed.
+- If some datablocks fail during `Apply`, the operator can finish with partial results.
+- Follow the status message:
+  Use Undo for internal changes and `Restore from .bak` for external catalog changes when requested.
 
 ## Known Limitations
 

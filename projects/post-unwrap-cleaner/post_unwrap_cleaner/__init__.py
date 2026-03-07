@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 5),
+    "version": (1, 1, 6),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -222,8 +222,15 @@ class PUC_OT_one_click_clean(Operator):
             return {"CANCELLED"}
 
         me = obj.data
+        if not me.uv_layers:
+            self.report({"ERROR"}, "No UV map found. Unwrap or create a UV map first.")
+            return {"CANCELLED"}
+
         bm = bmesh.from_edit_mesh(me)
-        uv_layer = bm.loops.layers.uv.verify()
+        uv_layer = bm.loops.layers.uv.active
+        if uv_layer is None:
+            self.report({"ERROR"}, "No active UV map found.")
+            return {"CANCELLED"}
 
         snapshot = _snapshot_uv_selection_state(bm, uv_layer)
         loops, skipped_pins = _prepare_target_selection(

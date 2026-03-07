@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Auto Cataloger",
     "author": "SMG Tools",
-    "version": (1, 1, 5),
+    "version": (1, 1, 6),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
     "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
@@ -76,6 +76,11 @@ def _pretty_catalog_leaf(value):
     if not leaf:
         return "Uncategorized"
     return leaf.title()
+
+
+def _validate_catalog_root_prefix(value):
+    if ":" in value or "\n" in value or "\r" in value:
+        raise ValueError("Catalog Root Prefix cannot contain ':' or line breaks.")
 
 
 def _catalog_paths_for_root(asset_library_root):
@@ -248,7 +253,13 @@ def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
     payload = _catalog_file_payload(headers, path_to_entry)
 
     if os.path.exists(catalog_file_path):
-        shutil.copy2(catalog_file_path, backup_file_path)
+        temp_backup_path = f"{backup_file_path}.tmp.{uuid.uuid4().hex}"
+        try:
+            shutil.copy2(catalog_file_path, temp_backup_path)
+            os.replace(temp_backup_path, backup_file_path)
+        finally:
+            if os.path.exists(temp_backup_path):
+                os.remove(temp_backup_path)
         _write_text_atomic(catalog_file_path, payload)
         return
 
@@ -435,6 +446,7 @@ def _plan_signature(prefs, root, plan):
 
 def _build_assignment_plan(context, prefs):
     library_root, root_source = _require_asset_library_root(context, prefs)
+    _validate_catalog_root_prefix(prefs.catalog_root_prefix)
 
     assignable_plan = []
     skipped_linked = 0
@@ -712,6 +724,7 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state.preview_skipped_external = skipped_external
         state.preview_skipped_non_assets = skipped_non_assets
         state.preview_will_auto_mark = will_auto_mark
+        state.preview_items.clear()
         state.preview_ready = False
         state.preview_signature = ""
         state.last_root = root
@@ -729,9 +742,15 @@ class AUTO_CATALOGER_OT_apply(Operator):
         if failures:
             first_failure = failures[0]
             if modified_external or modified_internal:
+                if modified_external and modified_internal:
+                    recovery_hint = "Use Undo for internal changes and Restore from .bak for external catalog changes."
+                elif modified_external:
+                    recovery_hint = "Catalog file changed on disk. Use Restore from .bak to revert external changes."
+                else:
+                    recovery_hint = "Use Undo to revert internal changes."
                 self.report(
                     {"ERROR"},
-                    f"{summary}. Partial apply completed. Use Undo to revert internal changes. First failure: {first_failure}",
+                    f"{summary}. Partial apply completed. {recovery_hint} First failure: {first_failure}",
                 )
                 return {"FINISHED"}
 

@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "post_unwrap_cleaner"
-version = "1.1.5"
+version = "1.1.6"
 name = "Post-Unwrap Cleaner"
 tagline = "One-click UV cleanup after unwrap"
 maintainer = "SMG Tools <support@smgtools.dev>"
