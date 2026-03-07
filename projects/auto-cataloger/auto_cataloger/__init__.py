@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Auto Cataloger",
     "author": "SMG Tools",
-    "version": (1, 1, 4),
+    "version": (1, 1, 5),
     "blender": (4, 2, 0),
     "location": "3D View > Sidebar > Auto Cataloger",
     "description": "Rules-based catalog creation and bulk assignment for Asset Browser.",
@@ -153,13 +153,18 @@ def _resolve_registered_library_root(context, prefs):
 def _resolve_asset_library_root(context, prefs):
     if prefs.asset_library_name != MANUAL_LIBRARY_KEY:
         registered = _resolve_registered_library_root(context, prefs)
-        if registered:
+        if registered and os.path.isdir(registered):
             return registered, "REGISTERED", ""
+        if registered:
+            return None, "REGISTERED_INVALID", "Selected Asset Library path must point to an existing folder."
         return None, "REGISTERED_MISSING", "Selected Asset Library could not be resolved."
 
     manual = bpy.path.abspath(prefs.asset_library_root_folder).strip()
     if manual:
-        return os.path.abspath(manual), "MANUAL", ""
+        manual_root = os.path.abspath(manual)
+        if os.path.isdir(manual_root):
+            return manual_root, "MANUAL", ""
+        return None, "MANUAL_MISSING", "Asset Library Root Folder must point to an existing folder."
 
     return None, "NONE", "Choose a registered Asset Library or set Asset Library Root Folder."
 
@@ -244,11 +249,33 @@ def _write_catalog_file_with_backup(catalog_file_path, headers, path_to_entry):
 
     if os.path.exists(catalog_file_path):
         shutil.copy2(catalog_file_path, backup_file_path)
+        _write_text_atomic(catalog_file_path, payload)
+        return
 
-    _write_text_atomic(catalog_file_path, payload)
+    temp_catalog_path = f"{catalog_file_path}.tmp.{uuid.uuid4().hex}"
+    temp_backup_path = f"{backup_file_path}.tmp.{uuid.uuid4().hex}"
+    backup_published = False
+    catalog_published = False
 
-    if not os.path.exists(backup_file_path):
-        shutil.copy2(catalog_file_path, backup_file_path)
+    try:
+        with open(temp_catalog_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+        shutil.copy2(temp_catalog_path, temp_backup_path)
+        os.replace(temp_backup_path, backup_file_path)
+        backup_published = True
+        os.replace(temp_catalog_path, catalog_file_path)
+        catalog_published = True
+    except Exception:
+        if catalog_published and os.path.exists(catalog_file_path):
+            os.remove(catalog_file_path)
+        if backup_published and os.path.exists(backup_file_path):
+            os.remove(backup_file_path)
+        raise
+    finally:
+        if os.path.exists(temp_catalog_path):
+            os.remove(temp_catalog_path)
+        if os.path.exists(temp_backup_path):
+            os.remove(temp_backup_path)
 
 
 def _restore_catalog_from_backup(catalog_file_path, backup_file_path):
@@ -276,7 +303,6 @@ def _restore_catalog_from_backup(catalog_file_path, backup_file_path):
 
 
 def _ensure_catalogs(asset_library_root, catalog_paths):
-    os.makedirs(asset_library_root, exist_ok=True)
     catalog_file_path, _ = _catalog_paths_for_root(asset_library_root)
     headers, path_to_entry = _read_catalog_file(catalog_file_path)
 
@@ -658,7 +684,7 @@ class AUTO_CATALOGER_OT_apply(Operator):
 
         assigned = 0
         auto_marked = 0
-        auto_mark_failed = 0
+        failures = []
         for datablock, catalog_path in plan:
             try:
                 asset_data = getattr(datablock, "asset_data", None)
@@ -668,7 +694,8 @@ class AUTO_CATALOGER_OT_apply(Operator):
                     if asset_data is not None:
                         auto_marked += 1
                     else:
-                        auto_mark_failed += 1
+                        failures.append(f"{datablock.name}: asset_mark() did not create asset data")
+                        continue
 
                 if asset_data is None:
                     continue
@@ -676,8 +703,8 @@ class AUTO_CATALOGER_OT_apply(Operator):
                 asset_data.catalog_id = uuid_map[catalog_path]
                 assigned += 1
             except (OSError, RuntimeError, KeyError) as exc:
-                self.report({"ERROR"}, f"Asset assignment failed for '{datablock.name}': {exc}")
-                return {"CANCELLED"}
+                failures.append(f"{datablock.name}: {exc}")
+                continue
 
         state.preview_total = assigned
         state.preview_catalog_count = len(catalog_paths)
@@ -690,14 +717,30 @@ class AUTO_CATALOGER_OT_apply(Operator):
         state.last_root = root
         state.last_root_source = root_source
 
+        modified_external = created > 0
+        modified_internal = auto_marked > 0 or assigned > 0
+        summary = (
+            f"Apply summary: assigned {assigned}, auto-marked {auto_marked}, "
+            f"failed {len(failures)}, created catalogs {created}, "
+            f"skipped linked {skipped_linked}, skipped out-of-root {skipped_external}, "
+            f"skipped non-assets {skipped_non_assets}"
+        )
+
+        if failures:
+            first_failure = failures[0]
+            if modified_external or modified_internal:
+                self.report(
+                    {"ERROR"},
+                    f"{summary}. Partial apply completed. Use Undo to revert internal changes. First failure: {first_failure}",
+                )
+                return {"FINISHED"}
+
+            self.report({"ERROR"}, f"{summary}. No changes were applied. First failure: {first_failure}")
+            return {"CANCELLED"}
+
         self.report(
             {"INFO"},
-            (
-                f"Applied: {assigned} assignable, catalogs: {len(catalog_paths)} (created {created}), "
-                f"auto-marked {auto_marked}, auto-mark failed {auto_mark_failed}, "
-                f"skipped linked {skipped_linked}, skipped out-of-root {skipped_external}, "
-                f"skipped non-assets {skipped_non_assets}"
-            ),
+            summary,
         )
         return {"FINISHED"}
 
@@ -728,7 +771,6 @@ class AUTO_CATALOGER_OT_restore_backup(Operator):
             self.report({"ERROR"}, f"Backup not found: {backup_file}")
             return {"CANCELLED"}
 
-        os.makedirs(root, exist_ok=True)
         try:
             _restore_catalog_from_backup(catalog_file, backup_file)
         except OSError as exc:

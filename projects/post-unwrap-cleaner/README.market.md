@@ -30,6 +30,7 @@
 - `Respect Pins` excludes pinned UVs from the prepared target selection.
 - Pack-stage pin locking is requested when supported by the current Blender build.
 - Undo is supported for mesh and UV changes.
+- If an operation fails after partial UV changes, the operator finishes with an error message and you should use Undo to revert.
 
 ## Limitations
 

@@ -34,6 +34,7 @@ UV Editor one-click cleanup pipeline for post-unwrap workflows.
 - Pack-stage pin locking is requested when supported by the current Blender build.
 - Straighten step can produce `0` edits while Relax/Pack still run.
 - Undo is supported for mesh/UV data changes.
+- If an operation fails after partial UV changes, the operator finishes with an error message and you should use Undo to revert.
 
 ## Known Limitations
 

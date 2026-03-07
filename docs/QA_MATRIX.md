@@ -15,9 +15,12 @@ Last updated: `2026-03-07`
 | Preview with non-assets only, auto-mark OFF | 4.5.5 LTS | Pass | Preview returns `0 assignable`; Apply cancels without creating `.cats`. |
 | Preview with non-assets, auto-mark ON | 4.5.5 LTS | Pass | Preview reports pending auto-mark count; Apply auto-marks and assigns catalogs. |
 | Cross-drive relative folder handling | 4.5.5 LTS | Pass | Different Windows drive letters are skipped as external instead of raising `ValueError`. |
+| Existing root required | 4.5.5 LTS | Pass | Preview, Apply, and Restore reject missing root folders instead of creating them. |
 | First catalog write creates `.bak` | 4.5.5 LTS | Pass | First generated `.cats` file also produces a backup snapshot. |
+| First-write backup rollback | 4.5.5 LTS | Pass | First-write path prepares backup before publish so failed backup creation does not leave a half-published result. |
 | Restore from `.bak` is reversible | 4.5.5 LTS | Pass | Restore swaps current and backup so a second restore returns to prior content. |
 | Missing explicit library root | 4.5.5 LTS | Pass | Preview/Apply cancel with clear error; no `.blend` folder fallback. |
+| Partial apply returns finished | 4.5.5 LTS | Pass | Assignment failures after catalog creation or asset updates now finish with an error summary instead of cancelling. |
 
 ## Post-Unwrap Cleaner Verification
 
@@ -33,6 +36,7 @@ Last updated: `2026-03-07`
 | Selection restoration | 4.5.5 LTS | Pass | UV selection state matched snapshot after operator execution. |
 | Pinned UV unchanged in test scene | 4.5.5 LTS | Pass | Straighten and pack path left pinned UV coordinates unchanged in runtime test. |
 | Target wording alignment | 4.5.5 LTS | Pass | UI and buyer docs now use `Selected UV Selection` instead of island wording. |
+| Partial failure returns finished | 4.5.5 LTS | Pass | Runtime errors after UV edits now finish with an error message so Undo semantics stay consistent. |
 
 ## Smart Curve Helper Verification
 

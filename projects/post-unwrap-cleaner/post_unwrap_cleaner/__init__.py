@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Post-Unwrap Cleaner",
     "author": "SMG Tools",
-    "version": (1, 1, 4),
+    "version": (1, 1, 5),
     "blender": (4, 2, 0),
     "location": "UV Editor > Sidebar > Post-Unwrap Cleaner",
     "description": "One-click post unwrap cleanup: straighten, relax, pack.",
@@ -242,6 +242,7 @@ class PUC_OT_one_click_clean(Operator):
         changed = 0
         relaxed = False
         packed = False
+        did_modify = False
 
         area = context.area
         region = _get_uv_window_region(area)
@@ -259,6 +260,8 @@ class PUC_OT_one_click_clean(Operator):
                     threshold=settings.straighten_threshold,
                     respect_pins=settings.respect_pins,
                 )
+                if changed > 0:
+                    did_modify = True
 
             bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
 
@@ -272,6 +275,7 @@ class PUC_OT_one_click_clean(Operator):
                 if settings.run_relax:
                     bpy.ops.uv.minimize_stretch(iterations=settings.relax_iterations)
                     relaxed = True
+                    did_modify = True
                 if settings.run_pack:
                     bpy.ops.uv.pack_islands(
                         **_pack_islands_kwargs(
@@ -280,10 +284,14 @@ class PUC_OT_one_click_clean(Operator):
                         )
                     )
                     packed = True
+                    did_modify = True
 
         except RuntimeError as exc:
             _restore_uv_selection_state(snapshot, uv_layer)
             bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+            if did_modify:
+                self.report({"ERROR"}, f"UV operation failed after partial changes. Use Undo to revert. Details: {exc}")
+                return {"FINISHED"}
             self.report({"ERROR"}, f"UV operation failed: {exc}")
             return {"CANCELLED"}
 

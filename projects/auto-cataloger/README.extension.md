@@ -29,12 +29,15 @@
 - This extension manages `blender_assets.cats.txt` and `.bak` files inside the chosen Asset Library root.
 - Default behavior processes only datablocks already marked as assets.
 - `Auto-Mark Missing as Assets` is OFF by default.
+- The chosen Asset Library root must already exist. Preview, Apply, and Restore do not create missing folders.
 - Blender Undo does not revert external `.cats` file changes.
 - `Restore from .bak` swaps the current `.cats` file with the backup so the restore action itself is reversible.
+- If some datablocks fail during `Apply`, the operator can finish with partial results. Review the status message and use Undo to revert internal changes if needed.
 
 ## Limitations
 
 - You must choose a registered Asset Library or set `Asset Library Root Folder` explicitly.
+- The chosen Asset Library root must point to an existing directory.
 - Linked datablocks are skipped.
 - Relative folder mode skips datablocks that resolve outside the chosen library root or across different Windows drives.
 

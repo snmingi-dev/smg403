@@ -36,10 +36,12 @@ Rules-based Asset Browser catalog assignment tool for Blender library maintenanc
 - Optional `Auto-Mark Missing as Assets` is OFF by default.
 - `Preview` and `Apply` use the same assignable-set logic.
 - You must choose a registered Asset Library or set `Asset Library Root Folder` explicitly.
+- The chosen Asset Library root must already exist. Preview, Apply, and Restore do not create missing folders.
 - Catalog writes use an atomic replace and create `blender_assets.cats.txt.bak`.
 - On the first write, `.bak` is a snapshot of the first generated catalog file.
 - UI includes `Restore from .bak`, which swaps current and backup files so restore is reversible.
 - Blender Undo does not revert external `.cats` file edits.
+- If some datablocks fail during `Apply`, the operator can finish with partial results. Review the status message and use Undo to revert internal changes if needed.
 
 ## Known Limitations
 
