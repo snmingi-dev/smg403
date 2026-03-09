@@ -205,22 +205,27 @@ def _read_catalog_file(catalog_file_path):
 
     headers = []
     path_to_entry = {}
-    with open(catalog_file_path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("#") or stripped.startswith("VERSION "):
-                headers.append(stripped)
-                continue
-            parts = stripped.split(":", 2)
-            if len(parts) != 3:
-                continue
-            catalog_uuid, catalog_path, catalog_name = parts
-            path_to_entry[catalog_path] = {
-                "uuid": catalog_uuid,
-                "name": catalog_name,
-            }
+    try:
+        with open(catalog_file_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("#") or stripped.startswith("VERSION "):
+                    headers.append(stripped)
+                    continue
+                parts = stripped.split(":", 2)
+                if len(parts) != 3:
+                    continue
+                catalog_uuid, catalog_path, catalog_name = parts
+                path_to_entry[catalog_path] = {
+                    "uuid": catalog_uuid,
+                    "name": catalog_name,
+                }
+    except UnicodeError as exc:
+        raise ValueError(
+            f"Catalog file must be UTF-8 encoded: {catalog_file_path}"
+        ) from exc
 
     if not headers:
         headers = DEFAULT_HEADER_LINES[:]
@@ -695,7 +700,7 @@ class AUTO_CATALOGER_OT_apply(Operator):
         catalog_paths = sorted({catalog_path for _, catalog_path in plan})
         try:
             uuid_map, created = _ensure_catalogs(root, catalog_paths)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Catalog write failed: {exc}")
             return {"CANCELLED"}
 

@@ -44,6 +44,7 @@
 - The chosen Asset Library root must point to an existing directory.
 - Linked datablocks are skipped.
 - Relative folder mode skips datablocks that resolve outside the chosen library root or across different Windows drives.
+- Saving can normalize `.cats` formatting, comments, and entry ordering.
 
 ## Support
 
