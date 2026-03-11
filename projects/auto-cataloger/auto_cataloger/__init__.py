@@ -207,7 +207,7 @@ def _read_catalog_file(catalog_file_path):
     path_to_entry = {}
     try:
         with open(catalog_file_path, "r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if not stripped:
                     continue
@@ -216,8 +216,14 @@ def _read_catalog_file(catalog_file_path):
                     continue
                 parts = stripped.split(":", 2)
                 if len(parts) != 3:
-                    continue
+                    raise ValueError(
+                        f"Catalog file contains a malformed entry on line {line_number}: {catalog_file_path}"
+                    )
                 catalog_uuid, catalog_path, catalog_name = parts
+                if not catalog_uuid or not catalog_path or not catalog_name:
+                    raise ValueError(
+                        f"Catalog file contains an incomplete entry on line {line_number}: {catalog_file_path}"
+                    )
                 path_to_entry[catalog_path] = {
                     "uuid": catalog_uuid,
                     "name": catalog_name,

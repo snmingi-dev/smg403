@@ -35,6 +35,7 @@
 - Blender Undo does not revert external `.cats` file changes.
 - `Restore from .bak` swaps the current `.cats` file with the backup so the restore action itself is reversible.
 - If some datablocks fail during `Apply`, the operator can finish with partial results.
+- Invalid UTF-8 or malformed `.cats` entries are reported as errors instead of being rewritten silently.
 - Follow the status message:
   Use Undo for internal changes and `Restore from .bak` for external catalog changes when requested.
 
